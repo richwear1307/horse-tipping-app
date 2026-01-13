@@ -43,3 +43,14 @@ yarn-error.*
 # env files
 .env
 .env.*
+
+serviceAccountKey.json
+
+# Firebase
+.firebase/
+
+# Secrets
+serviceAccountKey.json
+
+# Local data imports
+races.csv
