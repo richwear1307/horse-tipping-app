@@ -9,6 +9,8 @@ import {
   Alert,
   Platform,
   TextInput,
+  ScrollView,
+  useWindowDimensions
 } from "react-native";
 
 import { auth, db as firestoreDb } from "./firebaseConfig";
@@ -29,6 +31,7 @@ import {
   doc,
   limit,
   setDoc,
+  deleteDoc,
   getDoc,
   getDocs,
   serverTimestamp,
@@ -37,6 +40,28 @@ import {
 function showMessage(title, message) {
   if (Platform.OS === "web") alert(`${title}\n\n${message}`);
   else Alert.alert(title, message);
+}
+
+function ProfileCornerButton({ onPress }) {
+  const { width } = useWindowDimensions();
+
+  // Must match your styles.content maxWidth and paddingHorizontal
+  const CONTENT_MAX_WIDTH = 520;
+  const CONTENT_PADDING_X = 16;
+
+  // Align to the right edge of the centered content column
+  const sideGutter = Math.max((width - CONTENT_MAX_WIDTH) / 2, 0);
+  const rightOffset = sideGutter + CONTENT_PADDING_X;
+
+  return (
+    <Pressable
+      onPress={onPress}
+      style={[styles.profileCornerButton, { right: rightOffset }]}
+      hitSlop={10}
+    >
+      <Text style={styles.profileCornerButtonText}>👤</Text>
+    </Pressable>
+  );
 }
 
 const ADMIN_EMAIL = "richwear1307@gmail.com";
@@ -88,6 +113,34 @@ function fractionToNumber(input) {
 function formatGBP(value) {
   const n = Number(value) || 0;
   return `£${n.toFixed(2)}`;
+}
+
+const DAY_SWITCH_HOUR = 18; // 6pm UK time
+
+function getRaceDays(races) {
+  return [...new Set(races.map(r => r.date))].sort();
+}
+
+function getActiveRaceDay(races) {
+  if (!races || races.length === 0) return null;
+
+  const days = getRaceDays(races);
+  const now = new Date();
+  const today = now.toLocaleDateString("en-CA"); // YYYY-MM-DD in local timezone
+  const hour = now.getHours();
+
+  let index = days.indexOf(today);
+
+  if (index === -1) {
+    if (today < days[0]) return days[0];
+    if (today > days[days.length - 1]) return days[days.length - 1];
+  }
+
+  if (hour >= DAY_SWITCH_HOUR && index < days.length - 1) {
+    return days[index + 1];
+  }
+
+  return days[index] ?? days[0];
 }
 
 function getWinnerHorse(raceResult) {
@@ -143,7 +196,7 @@ export default function App() {
   if (authLoading) {
     return (
       <View style={styles.container}>
-        <Text>Loading…</Text>
+        <Text style={styles.subtitle}>Loading…</Text>
       </View>
     );
   }
@@ -164,7 +217,6 @@ function GameApp({ user }) {
   const [tips, setTips] = useState([]);
   const [tipsLoading, setTipsLoading] = useState(true);
   const [results, setResults] = useState({}); // local results for now
-
   const races = useMemo(
     () => [
       {
@@ -184,13 +236,20 @@ function GameApp({ user }) {
     ],
     []
   );
+  
+  const [nowTick, setNowTick] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), 60000); // re-evaluate daily lock each minute
+    return () => clearInterval(id);
+  }, []);
+  const activeDay = useMemo(() => getActiveRaceDay(races), [races, nowTick]);
+
 useEffect(() => {
   if (!user) return;
 
 const q = query(
   collection(firestoreDb, "tips"),
-  where("userId", "==", user.uid),
-  orderBy("createdAt", "desc")
+  where("userId", "==", user.uid)
 );
 
   const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -256,34 +315,52 @@ const gbpTotal = useMemo(() => {
 
   const totalTips = tips.length;
 
-  if (screen === "races") {
-    return (
+if (screen === "races") {
+  return (
+    <View style={{ flex: 1 }}>
       <RacesScreen
         races={races}
+        activeDay={activeDay}
         onBack={() => setScreen("home")}
         onOpenRace={(raceId) => {
           setSelectedRaceId(raceId);
           setScreen("raceDetails");
         }}
       />
-    );
-  }
+      <ProfileCornerButton onPress={() => setScreen("profile")} />
+    </View>
+  );
+}
 
 if (screen === "profile") {
   return (
-    <ProfileScreen
-      user={user}
-      onBack={() => setScreen("home")}
-    />
+    <View style={{ flex: 1 }}>
+      <ProfileScreen user={user} onBack={() => setScreen("home")} />
+      <ProfileCornerButton onPress={() => setScreen("profile")} />
+    </View>
+  );
+}
+
+if (screen === "results") {
+  return (
+    <View style={{ flex: 1 }}>
+      <ResultsScreen
+        races={races}
+        results={results}
+        onBack={() => setScreen("home")}
+      />
+      <ProfileCornerButton onPress={() => setScreen("profile")} />
+    </View>
   );
 }
 
 if (screen === "raceDetails" && selectedRace) {
   return (
-    <RaceDetailsScreen
-      race={selectedRace}
-      onBack={() => setScreen("races")}
-            onSubmitTip={async (horseName) => {
+    <View style={{ flex: 1 }}>
+      <RaceDetailsScreen
+        race={selectedRace}
+        onBack={() => setScreen("races")}
+        onSubmitTip={async (horseName) => {
         try {
           const tipId = `${user.uid}_${selectedRace.id}`;
           const tipRef = doc(firestoreDb, "tips", tipId);
@@ -327,81 +404,123 @@ if (screen === "raceDetails" && selectedRace) {
         } catch (e) {
           showMessage("Error saving tip", e.message);
         }
-      }}
-    />
+        }}
+      />
+      <ProfileCornerButton onPress={() => setScreen("profile")} />
+    </View>
   );
 }
 
-
 if (screen === "myTips") {
   return (
-    <MyTipsScreen
-      tips={tips}
-      tipsLoading={tipsLoading}
-      results={results}
-      onBack={() => setScreen("home")}
-      onClear={() => { /* optional: delete tips later */ }}
-    />
+    <View style={{ flex: 1 }}>
+      <MyTipsScreen
+        tips={tips}
+        tipsLoading={tipsLoading}
+        results={results}
+        onBack={() => setScreen("home")}
+        onClear={() => { /* optional */ }}
+      />
+      <ProfileCornerButton onPress={() => setScreen("profile")} />
+    </View>
   );
 }
 
 if (screen === "admin") {
-  if (!isAdmin) {
-    showMessage("Access denied", "Admin only");
-    setScreen("home");
-    return null;
-  }
-
   return (
-    <AdminScreen
+    <View style={{ flex: 1 }}>
+      <AdminScreen
       races={races}
       results={results}
       onBack={() => setScreen("home")}
-      onSetWinner={async (raceId, winnerHorse) => {
+      onSaveResult={async (raceId, resultDoc) => {
         try {
           await setDoc(doc(firestoreDb, "results", raceId), {
             raceId,
-            winnerHorse,
+            ...resultDoc,
             updatedAt: serverTimestamp(),
           });
 
           const race = races.find((r) => r.id === raceId);
-          showMessage(
-            "Winner saved ✅",
-            `${race?.name}\nWinner: ${winnerHorse}`
-          );
+          showMessage("Result saved ✅", `${race?.name}\nResults updated`);
         } catch (e) {
           showMessage("Error saving result", e.message);
         }
       }}
-    />
+      onClearResults={async () => {
+        const clearAllResults = async () => {
+          const snapshot = await getDocs(collection(firestoreDb, "results"));
+          for (const docSnap of snapshot.docs) {
+            await deleteDoc(docSnap.ref);
+          }
+        };
+
+        if (Platform.OS === "web") {
+          if (!window.confirm("Are you sure you want to clear ALL results?")) return;
+
+          try {
+            await clearAllResults();
+            showMessage("Results cleared", "All race results have been removed.");
+          } catch (e) {
+            showMessage("Error clearing results", e.message);
+          }
+          return;
+        }
+
+        Alert.alert("Confirm", "Clear ALL results?", [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Clear",
+            style: "destructive",
+            onPress: async () => {
+              try {
+                await clearAllResults();
+                showMessage("Results cleared", "All race results have been removed.");
+              } catch (e) {
+                showMessage("Error clearing results", e.message);
+              }
+            },
+          },
+        ]);
+      }}
+      />
+      <ProfileCornerButton onPress={() => setScreen("profile")} />
+    </View>
   );
 }
 
 if (screen === "leaderboard") {
   return (
-    <LeaderboardScreen
-      currentUserId={user.uid}
-      onBack={() => setScreen("home")}
-      results={results}
-    />
+    <View style={{ flex: 1 }}>
+      <LeaderboardScreen
+        currentUserId={user.uid}
+        onBack={() => setScreen("home")}
+        results={results}
+        races={races}
+        activeDay={activeDay}
+      />
+      <ProfileCornerButton onPress={() => setScreen("profile")} />
+    </View>
   );
 }
 
 
   return (
+    <View style={{ flex: 1 }}>
     <HomeScreen
       userEmail={user.email}
       totalTips={totalTips}
       points={gbpTotal}
-      onGoProfile={() => setScreen("profile")}
       onGoRaces={() => setScreen("races")}
       onGoMyTips={() => setScreen("myTips")}
       onGoAdmin={isAdmin ? () => setScreen("admin") : null}
       onGoLeaderboard={() => setScreen("leaderboard")}
+      onGoResults={() => setScreen("results")}
       onLogout={() => signOut(auth)}
     />
-  );
+    <ProfileCornerButton onPress={() => setScreen("profile")} />
+  </View>
+);
 }
 
 function AuthScreen() {
@@ -432,6 +551,7 @@ function AuthScreen() {
 
       <TextInput
         placeholder="Email"
+        placeholderTextColor="rgba(255,255,255,0.45)"
         value={email}
         onChangeText={setEmail}
         autoCapitalize="none"
@@ -439,17 +559,18 @@ function AuthScreen() {
       />
       <TextInput
         placeholder="Password (6+ chars)"
+        placeholderTextColor="rgba(255,255,255,0.45)"
         value={password}
         onChangeText={setPassword}
         secureTextEntry
         style={styles.input}
       />
 
-      <Pressable style={styles.button} onPress={login}>
+      <Pressable style={[styles.button, styles.buttonPrimary]} onPress={login}>
         <Text style={styles.buttonText}>Log In</Text>
       </Pressable>
 
-      <Pressable style={styles.button} onPress={register}>
+      <Pressable style={[styles.button, styles.buttonPrimary]} onPress={register}>
         <Text style={styles.buttonText}>Register</Text>
       </Pressable>
 
@@ -462,16 +583,17 @@ function HomeScreen({
   userEmail,
   totalTips,
   points,
-  onGoProfile,
   onGoRaces,
   onGoMyTips,
   onGoAdmin,
   onGoLeaderboard,
+  onGoResults,
   onLogout,
 }) {
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>🏇 Horse Racing Tips Game</Text>
+      <View style={styles.content}>
+      <Text style={styles.title}>🏇 Cheltenham Festival Tipping Game</Text>
       <Text style={styles.subtitle}>{userEmail}</Text>
 
       <View style={styles.statsRow}>
@@ -484,14 +606,14 @@ function HomeScreen({
           <Text style={styles.statLabel}>GBP</Text>
         </View>
       </View>
+      {onGoAdmin && (
+  <Pressable style={styles.adminWideButton} onPress={onGoAdmin}>
+    <Text style={styles.adminWideButtonText}>Admin Panel</Text>
+  </Pressable>
+)}    
 
       {/* 3x3 grid buttons */}
       <View style={styles.grid}>
-        {onGoProfile && (
-          <Pressable style={styles.gridButton} onPress={onGoProfile}>
-            <Text style={styles.gridButtonText}>Profile</Text>
-          </Pressable>
-        )}
 
         <Pressable style={styles.gridButton} onPress={onGoRaces}>
           <Text style={styles.gridButtonText}>Races</Text>
@@ -505,11 +627,9 @@ function HomeScreen({
           <Text style={styles.gridButtonText}>Leaderboard</Text>
         </Pressable>
 
-        {onGoAdmin && (
-          <Pressable style={styles.gridButton} onPress={onGoAdmin}>
-            <Text style={styles.gridButtonText}>Admin</Text>
-          </Pressable>
-        )}
+        <Pressable style={styles.gridButton} onPress={onGoResults}>
+  <Text style={styles.gridButtonText}>Results</Text>
+</Pressable>
 
         <Pressable style={styles.gridButton} onPress={onLogout}>
           <Text style={styles.gridButtonText}>Log Out</Text>
@@ -517,6 +637,59 @@ function HomeScreen({
       </View>
 
       <StatusBar style="auto" />
+    </View>
+    </View>
+  );
+}
+
+function ResultsScreen({ races, results, onBack }) {
+  const days = useMemo(() => getRaceDays(races), [races]);
+
+  return (
+    <View style={styles.container}>
+      <ScrollView style={styles.content} contentContainerStyle={{ paddingBottom: 40 }}>
+        <Text style={styles.title}>🏁 Results</Text>
+
+        <Pressable style={[styles.button, styles.smallButton, styles.buttonGhost]} onPress={onBack}>
+          <Text style={styles.buttonText}>← Back</Text>
+        </Pressable>
+
+        {days.map((day) => {
+          const dayRaces = races.filter(r => r.date === day);
+
+          return (
+            <View key={day} style={[styles.card, { marginTop: 10 }]}>
+              <Text style={styles.cardTitle}>{day}</Text>
+
+              {dayRaces.map((r) => {
+                const res = results?.[r.id];
+                const winner = res?.placements?.find(p => p.position === 1);
+
+                return (
+                  <View key={r.id} style={[styles.card, { marginTop: 8 }]}>
+                    <Text style={styles.cardTitle}>{r.name}</Text>
+
+                    {!winner ? (
+                      <Text style={styles.cardSubtitle}>Result: pending</Text>
+                    ) : (
+                      <>
+                        <Text style={styles.cardSubtitle}>
+                          Winner: {winner.horseName}
+                        </Text>
+                        <Text style={styles.cardHint}>
+                          Odds: {winner.oddsDisplay || winner.oddsDecimal}
+                        </Text>
+                      </>
+                    )}
+                  </View>
+                );
+              })}
+            </View>
+          );
+        })}
+
+        <StatusBar style="auto" />
+      </ScrollView>
     </View>
   );
 }
@@ -589,9 +762,10 @@ function ProfileScreen({ user, onBack }) {
 
   return (
     <View style={styles.container}>
+      <View style={styles.content}>
       <Text style={styles.title}>Profile</Text>
 
-      <Pressable style={[styles.button, styles.smallButton]} onPress={onBack}>
+      <Pressable style={[styles.button, styles.smallButton, styles.buttonGhost]} onPress={onBack}>
         <Text style={styles.buttonText}>← Back</Text>
       </Pressable>
 
@@ -603,13 +777,14 @@ function ProfileScreen({ user, onBack }) {
 
           <TextInput
             value={displayName}
+            placeholderTextColor="rgba(255,255,255,0.45)"
             onChangeText={setDisplayName}
             placeholder="Enter display name"
             style={styles.input}
           />
 
           <Pressable
-            style={[styles.button, saving ? styles.buttonDisabled : null]}
+            style={[styles.button, styles.buttonPrimary, saving ? styles.buttonDisabled : null]}
             onPress={save}
             disabled={saving}
           >
@@ -620,10 +795,11 @@ function ProfileScreen({ user, onBack }) {
 
       <StatusBar style="auto" />
     </View>
+  </View>
   );
 }
 
-function RacesScreen({ races, onBack, onOpenRace }) {
+function RacesScreen({ races, activeDay, onBack, onOpenRace }) {
   const [now, setNow] = useState(Date.now());
   const [selectedIndex, setSelectedIndex] = useState(0);
 
@@ -634,13 +810,18 @@ function RacesScreen({ races, onBack, onOpenRace }) {
   }, []);
 
   // Keep index valid
-  useEffect(() => {
-    if (selectedIndex > races.length - 1) {
-      setSelectedIndex(0);
-    }
-  }, [races.length, selectedIndex]);
 
-  const selectedRace = races[selectedIndex];
+    const visibleRaces = useMemo(() => {
+  if (!activeDay) return [];
+  return races.filter(r => r.date === activeDay);
+}, [races, activeDay]);
+  useEffect(() => {
+if (selectedIndex > visibleRaces.length - 1) {
+  setSelectedIndex(0);
+}
+}, [visibleRaces.length, selectedIndex]);
+
+  const selectedRace = visibleRaces[selectedIndex];
 
   if (!selectedRace) {
     return (
@@ -659,15 +840,16 @@ function RacesScreen({ races, onBack, onOpenRace }) {
 
   return (
     <View style={styles.container}>
+      <View style={styles.content}>
       <Text style={styles.title}>Upcoming Races</Text>
 
-      <Pressable style={[styles.button, styles.smallButton]} onPress={onBack}>
+      <Pressable style={[styles.button, styles.smallButton, styles.buttonGhost]} onPress={onBack}>
         <Text style={styles.buttonText}>← Back</Text>
       </Pressable>
 
       {/* 1–7 race selector */}
       <View style={styles.raceSelectorRow}>
-        {races.slice(0, 7).map((race, idx) => {
+        {visibleRaces.slice(0, 7).map((race, idx) => {
           const active = idx === selectedIndex;
           return (
             <Pressable
@@ -700,23 +882,25 @@ function RacesScreen({ races, onBack, onOpenRace }) {
           {locked ? "Tips closed" : "Tips close in"}: {countdownText}
         </Text>
 
-        <Pressable
-          style={[
-            styles.button,
-            { marginTop: 10 },
-            locked && styles.buttonDisabled,
-          ]}
-          disabled={locked}
-          onPress={() => onOpenRace(selectedRace.id)}
-        >
-          <Text style={styles.buttonText}>
-            {locked ? "Race locked" : "Open race"}
-          </Text>
-        </Pressable>
+<Pressable
+  style={[
+    styles.button,
+    styles.buttonPrimary,
+    { marginTop: 10 },
+    locked && styles.buttonDisabled,
+  ]}
+  disabled={locked}
+  onPress={() => onOpenRace(selectedRace.id)}
+>
+  <Text style={styles.buttonText}>
+    {locked ? "Race locked" : "Open race"}
+  </Text>
+</Pressable>
       </View>
 
       <StatusBar style="auto" />
     </View>
+  </View>
   );
 }
 
@@ -725,10 +909,11 @@ function RaceDetailsScreen({ race, onBack, onSubmitTip }) {
 
   return (
     <View style={styles.container}>
+      <View style={styles.content}>
       <Text style={styles.title}>{race.name}</Text>
       <Text style={styles.subtitle}>{race.date}</Text>
 
-      <Pressable style={[styles.button, styles.smallButton]} onPress={onBack}>
+      <Pressable style={[styles.button, styles.smallButton, styles.buttonGhost]} onPress={onBack}>
         <Text style={styles.buttonText}>← Back</Text>
       </Pressable>
 
@@ -737,7 +922,7 @@ function RaceDetailsScreen({ race, onBack, onSubmitTip }) {
       <FlatList
         data={race.horses}
         keyExtractor={(h) => h}
-        style={{ alignSelf: "stretch", marginTop: 10 }}
+        style={{ marginTop: 10 }}
         renderItem={({ item }) => {
           const active = item === selectedHorse;
           return (
@@ -756,7 +941,7 @@ function RaceDetailsScreen({ race, onBack, onSubmitTip }) {
 
       <Pressable
         style={[
-          styles.button,
+          styles.button, styles.buttonPrimary,
           { marginTop: 10 },
           !selectedHorse ? styles.buttonDisabled : null,
         ]}
@@ -768,15 +953,17 @@ function RaceDetailsScreen({ race, onBack, onSubmitTip }) {
 
       <StatusBar style="auto" />
     </View>
+    </View>
   );
 }
 
 function MyTipsScreen({ tips, tipsLoading, results, onBack, onClear }) {
   return (
     <View style={styles.container}>
+      <View style={styles.content}>
       <Text style={styles.title}>My Tips</Text>
 
-      <Pressable style={[styles.button, styles.smallButton]} onPress={onBack}>
+      <Pressable style={[styles.button, styles.smallButton, styles.buttonGhost]} onPress={onBack}>
         <Text style={styles.buttonText}>← Back</Text>
       </Pressable>
 
@@ -788,7 +975,7 @@ function MyTipsScreen({ tips, tipsLoading, results, onBack, onClear }) {
         <FlatList
           data={tips}
           keyExtractor={(t) => t.id}
-          style={{ alignSelf: "stretch", marginTop: 10 }}
+          style={{ marginTop: 10 }}
           renderItem={({ item }) => {
             const raceResult = results[item.raceId];
             const winnerHorse = getWinnerHorse(raceResult);
@@ -827,7 +1014,7 @@ function MyTipsScreen({ tips, tipsLoading, results, onBack, onClear }) {
 
     {!!onClear && (
       <Pressable
-        style={[styles.button, { marginTop: 10 }]}
+        style={[styles.button, styles.buttonDanger, { marginTop: 10 }]}
         onPress={onClear}
       >
         <Text style={styles.buttonText}>Clear Tips (test)</Text>
@@ -836,10 +1023,13 @@ function MyTipsScreen({ tips, tipsLoading, results, onBack, onClear }) {
 
     <StatusBar style="auto" />
   </View>
+  </View>
 );
 }
 
-function LeaderboardScreen({ currentUserId, onBack, results }) {
+function LeaderboardScreen({ currentUserId, onBack, results, races, activeDay }) {
+  const [leaderboard, setLeaderboard] = useState([]);
+  const [mode, setMode] = useState("day"); // "day" | "all"
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [usersMap, setUsersMap] = useState({});
@@ -870,19 +1060,33 @@ function LeaderboardScreen({ currentUserId, onBack, results }) {
         const tips = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
         const byUser = {}; // userId -> { userId, displayName, gbp, tips }
 
-        for (const t of tips) {
-          const userId = t.userId || "unknown";
-          const displayName =
-            usersMap[userId]?.displayName || t.userEmail || userId;
+const racesById = Object.fromEntries((races ?? []).map(r => [r.id, r]));
 
-          if (!byUser[userId]) {
-            byUser[userId] = { userId, displayName, gbp: 0, tips: 0 };
-          }
+// Only count races that have taken place (i.e. have a result)
+const completedTips =
+  (tips ?? []).filter(t => !!results?.[t.raceId]);
 
-          byUser[userId].tips += 1;
+// Day mode = only completed races from activeDay
+const scopedTips =
+  mode === "all"
+    ? completedTips
+    : completedTips.filter(t => {
+        const race = racesById[t.raceId];
+        return race && race.date === activeDay;
+      });
 
-          byUser[userId].gbp += calcGbpProfitForTip(t, results?.[t.raceId], STAKE_GBP);
-        }
+for (const t of scopedTips) {
+  const userId = t.userId || "unknown";
+  const displayName =
+    usersMap[userId]?.displayName || t.userEmail || userId;
+
+  if (!byUser[userId]) {
+    byUser[userId] = { userId, displayName, gbp: 0, tips: 0 };
+  }
+
+  byUser[userId].tips += 1;
+  byUser[userId].gbp += calcGbpProfitForTip(t, results?.[t.raceId], STAKE_GBP);
+}
 
         const list = Object.values(byUser).sort((a, b) => b.gbp - a.gbp);
         setRows(list);
@@ -895,7 +1099,7 @@ function LeaderboardScreen({ currentUserId, onBack, results }) {
     );
 
     return unsubscribe;
-  }, [results, usersMap]);
+}, [results, usersMap, mode, races, activeDay]);
 
   const myIndex = rows.findIndex((r) => r.userId === currentUserId);
   const myRow = myIndex >= 0 ? rows[myIndex] : null;
@@ -917,11 +1121,28 @@ function LeaderboardScreen({ currentUserId, onBack, results }) {
 
   return (
     <View style={styles.container}>
+      <View style={styles.content}>
       <Text style={styles.title}>🏆 Leaderboard</Text>
 
-      <Pressable style={[styles.button, styles.smallButton]} onPress={onBack}>
+      <Pressable style={[styles.button, styles.smallButton, styles.buttonGhost]} onPress={onBack}>
         <Text style={styles.buttonText}>← Back</Text>
       </Pressable>
+
+      <View style={{ flexDirection: "row", gap: 10, marginVertical: 10 }}>
+  <Pressable
+    style={[styles.smallChoice, mode === "day" && styles.cardActive, { flex: 1 }]}
+    onPress={() => setMode("day")}
+  >
+    <Text style={styles.smallChoiceText}>Today</Text>
+  </Pressable>
+
+  <Pressable
+    style={[styles.smallChoice, mode === "all" && styles.cardActive, { flex: 1 }]}
+    onPress={() => setMode("all")}
+  >
+    <Text style={styles.smallChoiceText}>Cumulative</Text>
+  </Pressable>
+</View>
 
       {loading ? (
         <Text style={styles.subtitle}>Loading leaderboard…</Text>
@@ -957,7 +1178,7 @@ function LeaderboardScreen({ currentUserId, onBack, results }) {
               ref={listRef}
               data={rows}
               keyExtractor={(item) => item.userId}
-              style={{ alignSelf: "stretch", marginTop: 10 }}
+              style={{ marginTop: 10 }}
               onScrollToIndexFailed={(info) => {
                 setTimeout(() => {
                   listRef.current?.scrollToIndex({
@@ -988,78 +1209,483 @@ function LeaderboardScreen({ currentUserId, onBack, results }) {
 
       <StatusBar style="auto" />
     </View>
-  );
-}
-function AdminScreen({ races, results, onBack, onSetWinner, onClearResults }) {
-  return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Admin: Enter Results</Text>
-      <Text style={styles.subtitle}>Tap a horse to set the winner.</Text>
-
-      <Pressable style={[styles.button, styles.smallButton]} onPress={onBack}>
-        <Text style={styles.buttonText}>← Back</Text>
-      </Pressable>
-
-      <FlatList
-        data={races}
-        keyExtractor={(r) => r.id}
-        style={{ alignSelf: "stretch", marginTop: 10 }}
-        renderItem={({ item: race }) => (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>{race.name}</Text>
-            <Text style={styles.cardSubtitle}>{race.date}</Text>
-            <Text style={styles.cardHint}>
-              Current winner: {getWinnerHorse(results[race.id]) ?? "not set"}
-            </Text>
-
-            <View style={{ marginTop: 10, gap: 8 }}>
-              {race.horses.map((h) => (
-                <Pressable
-                  key={h}
-                  style={styles.smallChoice}
-                  onPress={() => onSetWinner(race.id, h)}
-                >
-                  <Text style={styles.smallChoiceText}>{h}</Text>
-                </Pressable>
-              ))}
-            </View>
-          </View>
-        )}
-      />
-
-      <Pressable style={[styles.button, { marginTop: 10 }]} onPress={onClearResults}>
-        <Text style={styles.buttonText}>Clear Results (test)</Text>
-      </Pressable>
-
-      <StatusBar style="auto" />
     </View>
   );
 }
+function AdminScreen({ races, results, onBack, onSaveResult, onClearResults }) {
+  const [selectedRaceId, setSelectedRaceId] = useState(races?.[0]?.id ?? null);
+  const [positionMode, setPositionMode] = useState(1); // 1,2,3,4,5,6,7,8
+  const [drafts, setDrafts] = useState({}); // raceId -> { placements: {1,2,3,4,5,6,7,8} }
+  const POSITIONS = [1, 2, 3, 4, 5, 6, 7, 8];
+  
+  useEffect(() => {
+    if (!selectedRaceId && races?.[0]?.id) setSelectedRaceId(races[0].id);
+  }, [races, selectedRaceId]);
+
+  const race = races.find((r) => r.id === selectedRaceId);
+
+  const updateDraft = (raceId, updater) => {
+    setDrafts((prev) => {
+      const curr =
+        prev[raceId] ?? {
+          placesPaid: 3,
+          eachWayFraction: 0.25,
+          placements: {
+            1: { horseName: "", oddsInput: "" },
+            2: { horseName: "", oddsInput: "" },
+            3: { horseName: "", oddsInput: "" },
+            4: { horseName: "", oddsInput: "" },
+            5: { horseName: "", oddsInput: "" },
+            6: { horseName: "", oddsInput: "" },
+            7: { horseName: "", oddsInput: "" },
+            8: { horseName: "", oddsInput: "" },
+          },
+        };
+
+      const next = updater(curr);
+      return { ...prev, [raceId]: next };
+    });
+  };
+
+  if (!race) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.content}>
+          <Text style={styles.title}>Admin: Enter Results</Text>
+          <Text style={styles.subtitle}>No races available.</Text>
+          <Pressable style={[styles.button, styles.smallButton, styles.buttonGhost]} onPress={onBack}>
+            <Text style={styles.buttonText}>← Back</Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
+
+  const draft =
+    drafts[race.id] ?? {
+      placesPaid: 3,
+      eachWayFraction: 0.25,
+      placements: {
+            1: { horseName: "", oddsInput: "" },
+            2: { horseName: "", oddsInput: "" },
+            3: { horseName: "", oddsInput: "" },
+            4: { horseName: "", oddsInput: "" },
+            5: { horseName: "", oddsInput: "" },
+            6: { horseName: "", oddsInput: "" },
+            7: { horseName: "", oddsInput: "" },
+            8: { horseName: "", oddsInput: "" },
+      },
+    };
+
+  const assignHorse = (horseName) => {
+    updateDraft(race.id, (curr) => {
+      const nextPlacements = { ...curr.placements };
+
+      // prevent the same horse being set for multiple positions
+      for (const pos of POSITIONS) {
+        if (nextPlacements[pos]?.horseName === horseName) {
+          nextPlacements[pos] = { ...nextPlacements[pos], horseName: "" };
+        }
+      }
+
+      nextPlacements[positionMode] = {
+        ...(nextPlacements[positionMode] ?? {}),
+        horseName,
+      };
+
+      return { ...curr, placements: nextPlacements };
+    });
+  };
+
+  const setOdds = (pos, txt) => {
+    updateDraft(race.id, (curr) => {
+      const nextPlacements = { ...curr.placements };
+      nextPlacements[pos] = { ...(nextPlacements[pos] ?? {}), oddsInput: txt };
+      return { ...curr, placements: nextPlacements };
+    });
+  };
+
+  const saveResult = () => {
+    const p1 = draft.placements[1];
+    if (!p1?.horseName) {
+      showMessage("Missing winner", "Please set the 1st place horse.");
+      return;
+    }
+
+    const placements = POSITIONS
+      .map((pos) => {
+        const p = draft.placements[pos];
+        if (!p?.horseName) return null;
+
+        const oddsDecimal = fractionalToDecimal(p.oddsInput);
+        if (!oddsDecimal || oddsDecimal <= 1) return null;
+
+        return { position: pos, horseName: p.horseName, oddsDecimal, oddsDisplay: p.oddsInput };
+      })
+      .filter(Boolean);
+
+    if (placements.length === 0) {
+      showMessage("Missing odds", "Enter odds for at least the winner.");
+      return;
+    }
+
+    onSaveResult(race.id, {
+      placesPaid: Number(draft.placesPaid) || 3,
+      eachWayFraction: Number(draft.eachWayFraction) || 0.25,
+      placements,
+      winnerHorse:
+        placements.find((p) => p.position === 1)?.horseName ?? p1.horseName,
+    });
+  };
+
+return (
+  <View style={styles.container}>
+    <ScrollView
+      style={styles.content}
+      contentContainerStyle={{ paddingBottom: 40 }}
+      keyboardShouldPersistTaps="handled"
+    >
+      <Text style={styles.title}>Admin: Enter Results</Text>
+
+      <Pressable style={[styles.button, styles.smallButton, styles.buttonGhost]} onPress={onBack}>
+        <Text style={styles.buttonText}>← Back</Text>
+      </Pressable>
+
+      {/* Race selector 1–7 */}
+      <View style={styles.raceSelectorRow}>
+        {races.slice(0, 7).map((r, idx) => {
+          const active = r.id === race.id;
+          return (
+            <Pressable
+              key={r.id}
+              onPress={() => setSelectedRaceId(r.id)}
+              style={[
+                styles.raceSelectorBtn,
+                active && styles.raceSelectorBtnActive,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.raceSelectorText,
+                  active && styles.raceSelectorTextActive,
+                ]}
+              >
+                {idx + 1}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>{race.name}</Text>
+        <Text style={styles.cardSubtitle}>{race.date}</Text>
+
+        <Text style={styles.cardHint}>
+          Current winner: {getWinnerHorse(results[race.id]) ?? "not set"}
+        </Text>
+
+        {/* Settlement settings */}
+        <Text style={[styles.sectionTitle, { marginTop: 10 }]}>Places paid</Text>
+        <TextInput
+          value={String(draft.placesPaid ?? 3)}
+          placeholderTextColor="rgba(255,255,255,0.45)"
+          onChangeText={(txt) =>
+            updateDraft(race.id, (curr) => ({ ...curr, placesPaid: txt }))
+          }
+          keyboardType="number-pad"
+          style={styles.input}
+        />
+
+        <Text style={styles.sectionTitle}>Each-way fraction (e.g. 0.25)</Text>
+        <TextInput
+          value={String(draft.eachWayFraction ?? 0.25)}
+          placeholderTextColor="rgba(255,255,255,0.45)"
+          onChangeText={(txt) =>
+            updateDraft(race.id, (curr) => ({ ...curr, eachWayFraction: txt }))
+          }
+          keyboardType="decimal-pad"
+          style={styles.input}
+        />
+
+        {/* Position mode */}
+        <Text style={styles.sectionTitle}>Setting position</Text>
+        <View
+          style={{
+            flexDirection: "row",
+            flexWrap: "wrap",
+            gap: 8,
+            marginBottom: 10,
+          }}
+        >
+          {POSITIONS.map((pos) => (
+            <Pressable
+              key={pos}
+              onPress={() => setPositionMode(pos)}
+              style={[
+                styles.smallChoice,
+                positionMode === pos && styles.cardActive,
+              ]}
+            >
+              <Text style={styles.smallChoiceText}>
+                {pos === 1
+                  ? "1st"
+                  : pos === 2
+                  ? "2nd"
+                  : pos === 3
+                  ? "3rd"
+                  : `${pos}th`}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+
+        <Text style={styles.cardHint}>Tap a horse to assign it.</Text>
+
+        {/* Horse buttons */}
+        <View style={{ marginTop: 10, gap: 8 }}>
+          {race.horses.map((h) => (
+            <Pressable
+              key={h}
+              style={styles.smallChoice}
+              onPress={() => assignHorse(h)}
+            >
+              <Text style={styles.smallChoiceText}>{h}</Text>
+            </Pressable>
+          ))}
+        </View>
+
+        {/* Odds inputs for 1..8 */}
+        <View style={{ marginTop: 12 }}>
+          {POSITIONS.map((pos) => {
+            const p = draft.placements[pos];
+            return (
+              <View key={pos} style={{ marginBottom: 10 }}>
+                <Text style={styles.cardSubtitle}>
+                  {pos === 1
+                    ? "Winner"
+                    : `${pos}${pos === 2 ? "nd" : pos === 3 ? "rd" : "th"} place`}
+                  : {p?.horseName || "—"}
+                </Text>
+                <TextInput
+                  placeholder='Odds (decimal "6.5" or fractional "5/1")'
+                  placeholderTextColor="rgba(255,255,255,0.45)"
+                  value={p?.oddsInput ?? ""}
+                  onChangeText={(txt) => setOdds(pos, txt)}
+                  style={styles.input}
+                />
+              </View>
+            );
+          })}
+        </View>
+
+        <Pressable style={[styles.button, styles.buttonPrimary, { marginTop: 6 }]} onPress={saveResult}>
+          <Text style={styles.buttonText}>Save results</Text>
+        </Pressable>
+      </View>
+
+      {!!onClearResults && (
+        <Pressable
+          style={[styles.button, styles.buttonDanger, { marginTop: 10 }]}
+          onPress={onClearResults}
+        >
+          <Text style={styles.buttonText}>Clear Results (test)</Text>
+        </Pressable>
+      )}
+
+      <StatusBar style="auto" />
+    </ScrollView>
+  </View>
+);
+}
+
+const THEME = {
+  bg: "#0B0F14",
+  surface: "#151A21",
+  surface2: "#0F141B",
+  border: "rgba(255,255,255,0.10)",
+  text: "#FFFFFF",
+  text2: "rgba(255,255,255,0.72)",
+  text3: "rgba(255,255,255,0.55)",
+
+  primary: "#3B82F6",
+  success: "#22C55E",
+  warning: "#F59E0B",
+  danger: "#EF4444",
+
+  r12: 12,
+  r16: 16,
+  r20: 20,
+};
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 24, backgroundColor: "#fff", justifyContent: "center" },
-  title: { fontSize: 26, fontWeight: "700", marginBottom: 6, textAlign: "center" },
-  subtitle: { fontSize: 16, opacity: 0.75, marginBottom: 12, textAlign: "center" },
-  sectionTitle: { fontSize: 16, fontWeight: "700", marginTop: 10 },
+container: {
+  flex: 1,
+  backgroundColor: THEME.bg,
+  alignItems: "center",
+  justifyContent: "flex-start",
+  paddingVertical: 24,
+},
+
+content: {
+  width: "100%",
+  maxWidth: 520,
+  paddingHorizontal: 16,
+},
+
+title: {
+  fontSize: 26,
+  fontWeight: "800",
+  marginBottom: 6,
+  textAlign: "center",
+  paddingHorizontal: 66,
+  color: THEME.text,
+  letterSpacing: 0.2,
+},
+
+subtitle: {
+  fontSize: 16,
+  marginBottom: 12,
+  textAlign: "center",
+  paddingHorizontal: 56,
+  color: THEME.text2,
+},
+
+  sectionTitle: { fontSize: 16, fontWeight: "800", marginTop: 10, color: THEME.text },
   statsRow: { flexDirection: "row", gap: 10, marginBottom: 14 },
-  statCard: { flex: 1, borderWidth: 1, borderRadius: 12, padding: 12, alignItems: "center" },
-  statNumber: { fontSize: 22, fontWeight: "800" },
-  statLabel: { marginTop: 4, opacity: 0.7 },
-  input: { borderWidth: 1, borderRadius: 10, padding: 12, marginBottom: 10 },
-  button: { paddingVertical: 12, paddingHorizontal: 18, borderRadius: 10, borderWidth: 1, alignItems: "center", marginBottom: 10 },
+
+statCard: {
+  flex: 1,
+  backgroundColor: THEME.surface,
+  borderRadius: THEME.r16,
+  padding: 12,
+  alignItems: "center",
+  borderWidth: 1,
+  borderColor: "rgba(255,255,255,0.08)",
+},
+statNumber: { fontSize: 22, fontWeight: "900", color: THEME.text },
+statLabel: { marginTop: 4, color: THEME.text3 },
+
+  input: {
+  borderWidth: 1,
+  borderColor: THEME.border,
+  backgroundColor: "rgba(255,255,255,0.06)",
+  borderRadius: 14,
+  padding: 12,
+  marginBottom: 10,
+  color: THEME.text,
+},
+
+  button: {
+  borderRadius: THEME.r16,
+  paddingVertical: 12,
+  paddingHorizontal: 16,
+  alignItems: "center",
+  marginBottom: 10,
+  backgroundColor: "rgba(255,255,255,0.06)",
+  borderWidth: 1,
+  borderColor: THEME.border,
+},
+
+buttonPrimary: {
+  backgroundColor: THEME.primary,
+  borderColor: "rgba(255,255,255,0.10)",
+},
+
+buttonGhost: {
+  backgroundColor: "rgba(255,255,255,0.04)",
+  borderColor: "rgba(255,255,255,0.10)",
+},
+
+buttonDanger: {
+  backgroundColor: "rgba(239,68,68,0.18)",
+  borderColor: "rgba(239,68,68,0.35)",
+},
+
   adminButton: { marginTop: 6 },
-  smallButton: { alignSelf: "flex-start", paddingVertical: 8, paddingHorizontal: 12 },
-  buttonDisabled: { opacity: 0.4 },
-  buttonText: { fontSize: 16, fontWeight: "600" },
-  card: { borderWidth: 1, borderRadius: 12, padding: 12, marginBottom: 10 },
-  cardActive: { borderWidth: 2 },
-  meSummaryCard: { borderWidth: 2 },
-  leaderboardMe: { borderWidth: 2, backgroundColor: "#f5faff" },
-  cardTitle: { fontSize: 16, fontWeight: "700" },
-  cardSubtitle: { marginTop: 4, opacity: 0.7 },
-  cardHint: { marginTop: 6, opacity: 0.6, fontSize: 12 },
-  smallChoice: { borderWidth: 1, borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12 },
-  smallChoiceText: { fontSize: 14, fontWeight: "600" },
+
+smallButton: {
+  alignSelf: "flex-start",
+  paddingVertical: 8,
+  paddingHorizontal: 12,
+  borderRadius: 14,
+},
+
+ buttonDisabled: {
+  opacity: 0.45,
+},
+
+buttonText: {
+  fontSize: 16,
+  fontWeight: "800",
+  color: THEME.text,
+},
+
+  card: {
+  backgroundColor: THEME.surface,
+  borderRadius: THEME.r16,
+  padding: 14,
+  marginBottom: 10,
+
+  // depth
+  shadowColor: "#000",
+  shadowOpacity: 0.35,
+  shadowRadius: 12,
+  shadowOffset: { width: 0, height: 6 },
+  elevation: 6,
+},
+
+// optional: slightly different surface for nested cards (Results screen uses nested cards)
+cardAlt: {
+  backgroundColor: THEME.surface2,
+},
+
+
+  cardActive: {
+  // selected = slightly brighter border + extra depth
+  borderWidth: 1,
+  borderColor: "rgba(59,130,246,0.55)",
+  shadowOpacity: 0.5,
+  shadowRadius: 16,
+  elevation: 8,
+},
+
+  meSummaryCard: {
+  borderWidth: 1,
+  borderColor: "rgba(255,255,255,0.10)",
+},
+
+leaderboardMe: {
+  borderWidth: 1,
+  borderColor: "rgba(59,130,246,0.55)",
+  backgroundColor: "rgba(59,130,246,0.12)",
+},
+
+  cardTitle: {
+  fontSize: 16,
+  fontWeight: "800",
+  color: THEME.text,
+},
+
+  cardSubtitle: {
+  marginTop: 4,
+  color: THEME.text2,
+},
+
+  cardHint: {
+  marginTop: 6,
+  color: THEME.text3,
+  fontSize: 12,
+},
+smallChoice: {
+  backgroundColor: "rgba(255,255,255,0.05)",
+  borderWidth: 1,
+  borderColor: "rgba(255,255,255,0.10)",
+  borderRadius: 14,
+  paddingVertical: 10,
+  paddingHorizontal: 12,
+},
+smallChoiceText: { fontSize: 14, fontWeight: "800", color: THEME.text },
   cardSection: { marginTop: 12 },
   raceSelectorRow: {
   flexDirection: "row",
@@ -1073,24 +1699,23 @@ raceSelectorBtn: {
   flex: 1,
   marginHorizontal: 4,
   height: 44,
-  borderWidth: 1,
-  borderRadius: 10,
+  borderRadius: 14,
   justifyContent: "center",
   alignItems: "center",
+  backgroundColor: "rgba(255,255,255,0.05)",
+  borderWidth: 1,
+  borderColor: "rgba(255,255,255,0.10)",
 },
 
 raceSelectorBtnActive: {
-  borderWidth: 2,
+  backgroundColor: "rgba(59,130,246,0.20)",
+  borderColor: "rgba(59,130,246,0.55)",
 },
 
-raceSelectorText: {
-  fontSize: 16,
-  fontWeight: "600",
-},
+raceSelectorText: { fontSize: 16, fontWeight: "800", color: THEME.text2 },
 
-raceSelectorTextActive: {
-  fontWeight: "800",
-},
+raceSelectorTextActive: { color: THEME.text, fontWeight: "900" },
+
 grid: {
   flexDirection: "row",
   flexWrap: "wrap",
@@ -1100,20 +1725,69 @@ grid: {
 },
 
 gridButton: {
-  width: "30%",          // still 3 columns
-  height: 110,           // ✅ control height (instead of aspectRatio)
-  borderWidth: 1,
-  borderRadius: 12,
+  width: "30%",
+  height: 110,
+  borderRadius: THEME.r16,
   justifyContent: "center",
   alignItems: "center",
   marginBottom: 12,
-  paddingHorizontal: 8,
+  paddingHorizontal: 10,
+
+  backgroundColor: THEME.surface,
+  borderWidth: 1,
+  borderColor: "rgba(255,255,255,0.08)",
+
+  shadowColor: "#000",
+  shadowOpacity: 0.35,
+  shadowRadius: 12,
+  shadowOffset: { width: 0, height: 6 },
+  elevation: 6,
 },
 
 gridButtonText: {
   textAlign: "center",
   fontSize: 14,
-  fontWeight: "600",
+  fontWeight: "800",
+  color: THEME.text,
 },
 
+adminWideButton: {
+  width: "100%",
+  borderRadius: THEME.r16,
+  paddingVertical: 12,
+  alignItems: "center",
+  marginBottom: 12,
+  backgroundColor: "rgba(255,255,255,0.06)",
+  borderWidth: 1,
+  borderColor: THEME.border,
+},
+
+adminWideButtonText: {
+  fontSize: 16,
+  fontWeight: "800",
+  color: THEME.text,
+},
+
+profileCornerButton: {
+  position: "absolute",
+  top: 12,
+  padding: 10,
+  borderRadius: 999,
+  zIndex: 9999,
+  elevation: 10,
+
+  backgroundColor: THEME.surface,
+  borderWidth: 1,
+  borderColor: "rgba(255,255,255,0.12)",
+
+  shadowColor: "#000",
+  shadowOpacity: 0.45,
+  shadowRadius: 14,
+  shadowOffset: { width: 0, height: 7 },
+},
+profileCornerButtonText: {
+  color: THEME.text,
+  fontSize: 16,
+  fontWeight: "800",
+},
 });
