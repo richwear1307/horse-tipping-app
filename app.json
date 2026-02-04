@@ -23,10 +23,11 @@
       "edgeToEdgeEnabled": true,
       "package": "com.anonymous.tcccheltenham"
     },
-    "web": {
-      "baseUrl": "/horse-tipping-app/",
-      "favicon": "./icon.png"
-    },
+"web": {
+  "basePath": "/horse-tipping-app",
+  "publicPath": "/horse-tipping-app/",
+  "favicon": "./icon.png"
+}
     "plugins": [
       "expo-router"
     ]
