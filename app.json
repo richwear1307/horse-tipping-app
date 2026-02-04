@@ -1,14 +1,14 @@
 {
   "expo": {
-    "name": "horse-tipping-app",
-    "slug": "horse-tipping-app",
-    "version": "1.0.0",
+    "name": "Thornton CC Cheltenham Tipp App",
+    "slug": "tcc-cheltenham",
+    "version": "2.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/splash-icon.png",
+      "image": "./assets/icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
@@ -17,13 +17,18 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
+        "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "package": "com.anonymous.tcccheltenham"
     },
     "web": {
-      "favicon": "./assets/favicon.png"
-    }
+      "baseUrl": "/horse-tipping-app/",
+      "favicon": "./icon.png"
+    },
+    "plugins": [
+      "expo-router"
+    ]
   }
 }
