@@ -24,12 +24,10 @@
       "package": "com.anonymous.tcccheltenham"
     },
 "web": {
-  "basePath": "/horse-tipping-app",
-  "publicPath": "/horse-tipping-app/",
   "favicon": "./icon.png"
-}
-    "plugins": [
-      "expo-router"
-    ]
+},
+"plugins": [
+  "expo-router"
+]
   }
 }
