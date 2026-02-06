@@ -9,6 +9,7 @@
     "web": "expo start --web"
   },
   "dependencies": {
+    "@react-native-picker/picker": "^2.11.4",
     "expo": "~54.0.31",
     "expo-status-bar": "~3.0.9",
     "firebase": "^12.7.0",
