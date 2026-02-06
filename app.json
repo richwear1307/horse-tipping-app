@@ -25,10 +25,7 @@
       "package": "com.anonymous.tcccheltenham"
     },
 "web": {
-  "favicon": "./icon.png"
-},
-"plugins": [
-  "expo-router"
-]
+  "favicon": "./assets/icon.png"
+}
   }
 }
