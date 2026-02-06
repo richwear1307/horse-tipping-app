@@ -4,15 +4,23 @@
     "target": "ES2020",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "types": ["node", "mocha"],
+    "types": [
+      "node",
+      "mocha"
+    ],
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "strict": true,
     "declaration": true,
     "skipLibCheck": true,
     "paths": {
-      "firebase-frameworks": ["./packages/firebase-frameworks"],
-      "@apphosting/*": ["./packages/@apphosting/*"],
+      "firebase-frameworks": [
+        "./packages/firebase-frameworks"
+      ],
+      "@apphosting/*": [
+        "./packages/@apphosting/*"
+      ]
     }
-  }
+  },
+  "extends": "expo/tsconfig.base"
 }
