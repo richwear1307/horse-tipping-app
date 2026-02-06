@@ -53,6 +53,8 @@ import {
   serverTimestamp,
 } from "firebase/firestore";
 
+import InstallBanner from "./components/InstallBanner";
+
 // ---- GA4 helper (web only) ----
 function gaEvent(name, params = {}) {
   if (Platform.OS !== "web") return;
@@ -1921,6 +1923,9 @@ const AnimatedPressable = useMemo(
   contentContainerStyle={{ paddingBottom: FOOTER_HEIGHT + 24 }}
   showsVerticalScrollIndicator={false}
 >
+        {/* PWA install prompt */}
+      <InstallBanner />
+      
   {/* Hero banner */}
   <View style={[styles.heroWrap, { renderToHardwareTextureAndroid: true }]}>
         <ImageBackground
