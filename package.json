@@ -10,9 +10,11 @@
   },
   "dependencies": {
     "@react-native-picker/picker": "^2.11.4",
+    "csv-parse": "^6.1.0",
     "expo": "~54.0.31",
     "expo-status-bar": "~3.0.9",
     "firebase": "^12.7.0",
+    "firebase-admin": "^13.6.1",
     "lucide-react-native": "^0.563.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",
@@ -23,5 +25,21 @@
   "devDependencies": {
     "@types/react": "~19.1.10",
     "typescript": "~5.9.2"
-  }
+  },
+  "description": "App Hosting provides configuration-free build and deploy support for Web apps developed in these frameworks:",
+  "directories": {
+    "doc": "docs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/richwear1307/horse-tipping-app.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/richwear1307/horse-tipping-app/issues"
+  },
+  "homepage": "https://github.com/richwear1307/horse-tipping-app#readme"
 }

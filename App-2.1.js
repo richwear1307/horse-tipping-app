@@ -16,8 +16,6 @@ import {
   Switch,
 } from "react-native";
 
-import { getFunctions, httpsCallable } from "firebase/functions";
-
 import {
   House,
   Save,
@@ -36,9 +34,6 @@ import {
   signInWithEmailAndPassword,
   onAuthStateChanged,
   signOut,
-  sendSignInLinkToEmail,
-  isSignInWithEmailLink,     // ✅ (finish handler)
-  signInWithEmailLink,       // ✅ (finish handler)
 } from "firebase/auth";
 
 import {
@@ -57,8 +52,6 @@ import {
   arrayRemove,
   serverTimestamp,
 } from "firebase/firestore";
-
-import InstallBanner from "./components/InstallBanner";
 
 // ---- GA4 helper (web only) ----
 function gaEvent(name, params = {}) {
@@ -489,47 +482,9 @@ if (!entry) {
 }
 
 export default function App() {
+  // ✅ Auth hooks ALWAYS run (never conditional)
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
-
-  // ✅ NEW: finish email-link sign-in on web when user clicks the magic link
-  useEffect(() => {
-    if (Platform.OS !== "web") return;
-    if (typeof window === "undefined") return;
-
-    const href = window.location.href;
-
-    // Only run when the URL is an email sign-in link
-    if (!isSignInWithEmailLink(auth, href)) return;
-
-    (async () => {
-      try {
-        let email = window.localStorage.getItem("emailForSignIn");
-
-        // If they opened link on a different device/browser, ask for email
-        if (!email) {
-          email = window.prompt("Confirm your email to finish signing in:");
-        }
-
-        if (!email) {
-          showMessage("Email required", "Please enter your email to finish signing in.");
-          return;
-        }
-
-        await signInWithEmailLink(auth, email, href);
-        window.localStorage.removeItem("emailForSignIn");
-
-        // Optional: clean the URL (removes oobCode, apiKey, etc.)
-        window.history.replaceState({}, document.title, window.location.origin);
-      } catch (e) {
-        console.log("signInWithEmailLink failed:", e?.code, e?.message);
-        showMessage(
-          "Sign-in link failed",
-          "That link may have expired or already been used. Please request a new one."
-        );
-      }
-    })();
-  }, []);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
@@ -551,9 +506,9 @@ export default function App() {
     return <AuthScreen />;
   }
 
+  // ✅ All game hooks live in GameApp (separate component)
   return <GameApp user={user} />;
 }
-
 
 function GameApp({ user }) {
   // ✅ Game hooks ALWAYS run within GameApp
@@ -1690,35 +1645,6 @@ function AuthScreen() {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // ✅ NEW: send magic link
-const sendMagicLink = async () => {
-  if (!email) {
-    showMessage("Missing details", "Please enter your email address.");
-    return;
-  }
-
-  setBusy(true);
-  try {
-    // ✅ IMPORTANT: match your deployed region
-    const functions = getFunctions(undefined, "europe-west2");
-    const fn = httpsCallable(functions, "sendMagicLink");
-
-    await fn({ email: email.trim() });
-
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem("emailForSignIn", email.trim());
-    }
-
-    showMessage("Check your email", "We’ve sent you a sign-in link.");
-  } catch (e) {
-    console.log("call sendMagicLink failed:", e);
-    showMessage("Error", `${e?.code || "no-code"}\n${e?.message || "no-message"}`);
-  } finally {
-    setBusy(false);
-  }
-};
-
-
   const register = async () => {
     if (!email || !password) {
       showMessage("Missing details", "Please enter an email and password.");
@@ -1745,16 +1671,11 @@ const sendMagicLink = async () => {
     setBusy(true);
     try {
       await signInWithEmailAndPassword(auth, email.trim(), password);
-} catch (e) {
-  console.log("sendMagicLink callable error:", e);
-  showMessage(
-    "Error sending link",
-    `${e?.code || "no-code"}\n${e?.message || "no-message"}`
-  );
-} finally {
-  setBusy(false);
-}
-
+    } catch (e) {
+      showMessage("Error", e.message);
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -1779,12 +1700,8 @@ const sendMagicLink = async () => {
                     <Text style={styles.heroBadgeIcon}>🔐</Text>
                   </View>
 
-                  <Text style={styles.authTitle}>
-                    Thornton Cricket Club Cheltenham Tipping Competition
-                  </Text>
-                  <Text style={styles.authSubtitle}>
-                    Enter an email and password to register or log in to play
-                  </Text>
+                  <Text style={styles.authTitle}>Thornton Cricket Club Cheltenham Tipping Competition</Text>
+                  <Text style={styles.authSubtitle}>Enter an email and password to register or log in to play</Text>
 
                   <View style={styles.authForm}>
                     <TextInput
@@ -1837,23 +1754,8 @@ const sendMagicLink = async () => {
                       </Text>
                     </Pressable>
 
-                    {/* ✅ NEW BUTTON: uses same layout + styling */}
-                    <Pressable
-                      style={[
-                        styles.button,
-                        styles.authSecondaryBtn,
-                        busy && styles.buttonDisabled,
-                      ]}
-                      onPress={sendMagicLink}
-                      disabled={busy}
-                    >
-                      <Text style={styles.buttonText}>
-                        {busy ? "Working…" : "Email me a sign-in link"}
-                      </Text>
-                    </Pressable>
-
                     <Text style={styles.authHint}>
-                      Any identifiable data collected during this competition will be securely stored and used solely for the purpose of managing the tipping competition. We will not share your information with third parties, and it will be deleted after the competition concludes. By participating, you consent to this data usage policy.
+                      By continuing you agree to the group rules for the competition.
                     </Text>
                   </View>
                 </View>
@@ -2019,9 +1921,6 @@ const AnimatedPressable = useMemo(
   contentContainerStyle={{ paddingBottom: FOOTER_HEIGHT + 24 }}
   showsVerticalScrollIndicator={false}
 >
-        {/* PWA install prompt */}
-      <InstallBanner />
-      
   {/* Hero banner */}
   <View style={[styles.heroWrap, { renderToHardwareTextureAndroid: true }]}>
         <ImageBackground
