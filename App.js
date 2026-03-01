@@ -3232,13 +3232,13 @@ function LeaderboardScreen({
   currentUserId,
   onBack,
   activeCompetitionId,
-  // registeredUserIds, // ✅ no longer needed (we compute from usersMap)
 }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [usersMap, setUsersMap] = useState({});
-  const [days, setDays] = useState([]); // ["2026-01-17", "2026-01-18", ...]
-  const [mode, setMode] = useState("day"); // "day" | "overall"
+  const [usersLoaded, setUsersLoaded] = useState(false); // ✅ NEW
+  const [days, setDays] = useState([]);
+  const [mode, setMode] = useState("day");
   const [selectedDay, setSelectedDay] = useState(null);
 
   const LEADER_ROW_HEIGHT = 74;
@@ -3254,6 +3254,7 @@ function LeaderboardScreen({
           map[d.id] = d.data();
         });
         setUsersMap(map);
+        setUsersLoaded(true); // ✅ NEW
       },
       (err) => showMessage("Users load error", err.message)
     );
@@ -3261,9 +3262,10 @@ function LeaderboardScreen({
     return unsub;
   }, []);
 
-  // ✅ Build a Set of registered userIds for the active competition (Option A)
+  // ✅ Build a Set of registered userIds for the active competition
   const registeredSet = React.useMemo(() => {
     if (!activeCompetitionId) return null;
+    if (!usersLoaded) return null; // ✅ NEW: don’t filter until users loaded
 
     const set = new Set();
     Object.entries(usersMap || {}).forEach(([uid, u]) => {
@@ -3273,9 +3275,9 @@ function LeaderboardScreen({
       if (ids.includes(activeCompetitionId)) set.add(uid);
     });
     return set;
-  }, [usersMap, activeCompetitionId]);
+  }, [usersMap, activeCompetitionId, usersLoaded]);
 
-  // ✅ Load competition days from competitions/{id}.days (source of truth)
+  // Load competition days
   useEffect(() => {
     if (!activeCompetitionId) {
       setDays([]);
@@ -3312,7 +3314,7 @@ function LeaderboardScreen({
     return unsub;
   }, [activeCompetitionId]);
 
-  // ✅ If no days exist yet, default to overall (prevents "empty" before first result)
+  // ✅ If no days exist yet, default to overall
   useEffect(() => {
     if (mode === "day" && (!days || days.length === 0)) {
       setMode("overall");
@@ -3327,7 +3329,6 @@ function LeaderboardScreen({
       return;
     }
 
-    // If in day mode but we don't have a day yet, wait
     if (mode === "day" && !selectedDay) {
       setRows([]);
       setLoading(false);
@@ -3338,12 +3339,7 @@ function LeaderboardScreen({
 
     const baseCollection =
       mode === "overall"
-        ? collection(
-            firestoreDb,
-            "competitions",
-            activeCompetitionId,
-            "leaderboard"
-          )
+        ? collection(firestoreDb, "competitions", activeCompetitionId, "leaderboard")
         : collection(
             firestoreDb,
             "competitions",
@@ -3356,7 +3352,6 @@ function LeaderboardScreen({
     const q = query(
       baseCollection,
       orderBy("totalReturnInclStake", "desc"),
-      orderBy("createdAt", "asc"), // secondary sort for ties
       limit(200)
     );
 
@@ -3368,7 +3363,7 @@ function LeaderboardScreen({
           ...d.data(),
         }));
 
-        // ✅ Option A: Hide unregistered users (do NOT delete docs)
+        // ✅ Option A: only filter once usersLoaded (registeredSet null means “don’t filter”)
         const filtered = registeredSet
           ? list.filter((r) => registeredSet.has(r.userId))
           : list;

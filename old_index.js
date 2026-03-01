@@ -32,10 +32,7 @@
 // ------------------------------
 const { setGlobalOptions } = require("firebase-functions/v2");
 const logger = require("firebase-functions/logger");
-const {
-  onDocumentWritten,
-  onDocumentUpdated, // ✅ for seeding on registration
-} = require("firebase-functions/v2/firestore");
+const { onDocumentWritten } = require("firebase-functions/v2/firestore");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { defineJsonSecret } = require("firebase-functions/params");
 
@@ -52,10 +49,14 @@ setGlobalOptions({ maxInstances: 10 });
 // Secrets for IONOS SMTP
 // ------------------------------
 const nodemailer = require("nodemailer");
+
 const SMTP_CONFIG = defineJsonSecret("SMTP_CONFIG");
 
 /**
  * Callable: Send a custom-branded magic sign-in link email via IONOS SMTP.
+ *
+ * Frontend calls:
+ *   httpsCallable(getFunctions(), "sendMagicLink")({ email })
  */
 exports.sendMagicLink = onCall(
   {
@@ -67,119 +68,46 @@ exports.sendMagicLink = onCall(
     logger.info("sendMagicLink invoked", { email });
     if (!email) throw new HttpsError("invalid-argument", "Email required");
 
+    // IMPORTANT: set this to the EXACT origin where your web app runs
+    // Must also be present in Firebase Auth -> Authorized domains.
     const actionCodeSettings = {
       url: "https://tcctips.com",
       handleCodeInApp: true,
     };
 
+    // Generate Firebase magic link (Admin SDK)
     const link = await admin
       .auth()
       .generateSignInWithEmailLink(email, actionCodeSettings);
 
+    // Create SMTP transporter INSIDE handler so secrets are available
     const { host, port, user, pass, from } = SMTP_CONFIG.value();
 
-    const transporter = nodemailer.createTransport({
-      host,
-      port: Number(port || 587),
-      secure: Number(port) === 465,
-      auth: { user, pass },
-    });
+const transporter = nodemailer.createTransport({
+  host,
+  port: Number(port || 587),
+  secure: Number(port) === 465, // 465 = implicit TLS, 587 = STARTTLS
+  auth: { user, pass },
+});
 
-    await transporter.sendMail({
-      from: from || `"Thoronton CC Cheltenham Tipping Competition" <${user}>`,
-      to: email,
-      subject: "Sign in to your account",
-      html: `
-        <p>Hello,</p>
-        <p>Simply click below to sign in to your account without a password.</p>
-        <p>
-          <a href="${link}" style="display:inline-block;padding:12px 18px;text-decoration:none;border-radius:8px;font-weight:700;">
-            Sign in to TCC Tipping Competition
-          </a>
-        </p>
-        <p>If you didn’t request this, you can ignore this email.</p>
-        <p>Thanks,<br/>TCC Tipping</p>
-      `,
-    });
+await transporter.sendMail({
+  from: from || `"Thoronton CC Cheltenham Tipping Competition" <${user}>`,
+  to: email,
+  subject: "Sign in to your account",
+  html: `
+    <p>Hello,</p>
+    <p>Simply click below to sign in to your account without a password.</p>
+    <p>
+      <a href="${link}" style="display:inline-block;padding:12px 18px;text-decoration:none;border-radius:8px;font-weight:700;">
+        Sign in to TCC Tipping Competition
+      </a>
+    </p>
+    <p>If you didn’t request this, you can ignore this email.</p>
+    <p>Thanks,<br/>TCC Tipping</p>
+  `,
+});
 
     return { ok: true };
-  }
-);
-
-// -----------------------------------------------------------------------------
-// ✅ NEW: Seed overall leaderboard entry as soon as a user is registered
-// -----------------------------------------------------------------------------
-exports.seedLeaderboardOnRegistration = onDocumentUpdated(
-  {
-    document: "users/{userId}",
-    database: "(default)", // ✅ ensure correct Firestore DB
-    region: "europe-west2",
-  },
-  async (event) => {
-    const before = event.data?.before?.data() || {};
-    const after = event.data?.after?.data() || {};
-    const userId = event.params.userId;
-
-    const beforeIds = Array.isArray(before.registeredCompetitionIds)
-      ? before.registeredCompetitionIds
-      : [];
-    const afterIds = Array.isArray(after.registeredCompetitionIds)
-      ? after.registeredCompetitionIds
-      : [];
-
-    const beforeSet = new Set(beforeIds.map(String));
-    const added = afterIds.map(String).filter((id) => id && !beforeSet.has(id));
-    if (added.length === 0) return;
-
-    const db = admin.firestore();
-    const displayNameLower = String(after.displayName || "").trim().toLowerCase();
-
-    for (const competitionId of added) {
-      const ref = db
-        .collection("competitions")
-        .doc(competitionId)
-        .collection("leaderboard")
-        .doc(userId);
-
-      await db.runTransaction(async (tx) => {
-        const snap = await tx.get(ref);
-
-        if (!snap.exists) {
-          tx.set(
-            ref,
-            {
-              userId,
-              competitionId,
-              totalReturnInclStake: 0,
-              totalProfit: 0,
-              tips: 0,
-              createdAt: admin.firestore.FieldValue.serverTimestamp(),
-              displayNameLower,
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            },
-            { merge: true }
-          );
-          return;
-        }
-
-        const d = snap.data() || {};
-        const patch = {};
-        if (!d.createdAt)
-          patch.createdAt = admin.firestore.FieldValue.serverTimestamp();
-        if (!d.displayNameLower && displayNameLower)
-          patch.displayNameLower = displayNameLower;
-        patch.updatedAt = admin.firestore.FieldValue.serverTimestamp();
-
-        if (Object.keys(patch).length > 0) {
-          tx.set(ref, patch, { merge: true });
-        }
-      });
-
-      logger.info("Seeded overall leaderboard on registration", {
-        competitionId,
-        userId,
-      });
-    }
   }
 );
 
@@ -195,65 +123,52 @@ function normName(s) {
 }
 
 /**
- * ✅ UPDATED: Normalize a date value into ISO "YYYY-MM-DD" suitable for a Firestore document id.
+ * Normalize a date value into ISO "YYYY-MM-DD" suitable for a Firestore document id.
+ * Accepts:
+ *  - "YYYY-MM-DD"
+ *  - "DD/MM/YYYY"
+ *  - "DD-MM-YYYY"
+ * Returns null if it can't be normalized.
  */
 function normalizeDayKey(value) {
-  if (!value) return null;
-
-  if (typeof value === "object") {
-    try {
-      if (typeof value.toDate === "function") {
-        const d = value.toDate();
-        return d.toISOString().slice(0, 10);
-      }
-      if (typeof value.seconds === "number") {
-        const d = new Date(value.seconds * 1000);
-        return d.toISOString().slice(0, 10);
-      }
-    } catch (_) {}
-  }
-
-  let s = String(value)
-    .trim()
-    .replace(/\u00A0/g, " ")
-    .replace(/\r|\n/g, "");
-
+  const s = String(value ?? "").trim();
   if (!s) return null;
 
-  if (s.includes("T")) {
-    const iso = s.split("T")[0];
-    if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
-  }
-
+  // Already ISO
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
 
+  // DD/MM/YYYY -> YYYY-MM-DD
   let m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
   if (m) return `${m[3]}-${m[2]}-${m[1]}`;
 
+  // DD-MM-YYYY -> YYYY-MM-DD
   m = s.match(/^(\d{2})-(\d{2})-(\d{4})$/);
   if (m) return `${m[3]}-${m[2]}-${m[1]}`;
 
-  m = s.match(/^(\d{4})\/(\d{2})\/(\d{2})$/);
-  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  // As a final guard: if it contains a slash, do NOT use it as a doc id
+  if (s.includes("/")) return null;
 
   return null;
 }
 
 function parseOdds(raw) {
+  // Return DECIMAL ODDS (incl stake), e.g. 5/2 => 3.5, 1/1 => 2
   if (typeof raw === "number" && Number.isFinite(raw)) return raw;
 
   if (typeof raw === "string") {
     const s = raw.trim();
 
+    // decimal input e.g. "3.5"
     const asNum = Number(s);
     if (Number.isFinite(asNum) && asNum > 1) return asNum;
 
+    // fractional input e.g. "5/2", "12/1", "6.5/1"
     const m = s.match(/^(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)$/);
     if (m) {
       const num = Number(m[1]);
       const den = Number(m[2]);
       if (Number.isFinite(num) && Number.isFinite(den) && den !== 0) {
-        return 1 + num / den;
+        return 1 + num / den; // decimal odds including stake
       }
     }
   }
@@ -299,6 +214,9 @@ function calcEachWayProfit({
   placeFraction = 1 / 5,
   placesPaid = 3,
 }) {
+  // Profit-only (matches app UI):
+  // - stake is NOT included in totals
+  // - losers contribute 0
   const stakeWin = 5;
   const stakePlace = 5;
 
@@ -322,6 +240,13 @@ async function commitInChunks(writes, chunkSize = 450) {
   }
 }
 
+/**
+ * Deterministically update competition leaderboard for ONE user for ONE race:
+ * - sets raceReturns[raceId] = raceReturn
+ * - recomputes totalReturnInclStake = sum(raceReturns)
+ *
+ * This prevents drift/double-applies entirely.
+ */
 async function upsertCompetitionLeaderboardDeterministic({
   db,
   competitionId,
@@ -340,12 +265,12 @@ async function upsertCompetitionLeaderboardDeterministic({
     const snap = await tx.get(ref);
     const existing = snap.exists ? snap.data() : {};
 
-    const raceProfits = {
-      ...(existing.raceProfits || existing.raceReturns || {}),
-    };
+    const raceProfits = { ...(existing.raceProfits || existing.raceReturns || {}) };
 
+    // Replace the per-race contribution (do NOT increment)
     raceProfits[raceId] = Number(raceReturn ?? 0);
 
+    // Recompute total deterministically
     let total = 0;
     for (const v of Object.values(raceProfits)) {
       total += Number(v ?? 0);
@@ -357,8 +282,9 @@ async function upsertCompetitionLeaderboardDeterministic({
         userId,
         competitionId,
         totalProfit: total,
+        // Backwards compatible field name used by the app UI:
         totalReturnInclStake: total,
-        raceProfits,
+        raceProfits, // <- source of truth for competition totals
         lastSettlementVersion: settlementVersion,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
@@ -368,7 +294,12 @@ async function upsertCompetitionLeaderboardDeterministic({
 }
 
 /**
- * ✅ FIXED: creates the parent day document so leaderboardDays queries return docs.
+ * Deterministically update competition DAY leaderboard for ONE user for ONE race:
+ * - sets raceReturns[raceId] = raceReturn
+ * - recomputes totalReturnInclStake = sum(raceReturns)
+ *
+ * Stored at:
+ *   competitions/{competitionId}/leaderboardDays/{YYYY-MM-DD}/users/{userId}
  */
 async function upsertCompetitionLeaderboardDayDeterministic({
   db,
@@ -383,54 +314,42 @@ async function upsertCompetitionLeaderboardDayDeterministic({
 
   if (!safeDay) {
     logger.warn(
-      `Skipping day leaderboard write: invalid day="${String(
-        day ?? ""
-      )}" competitionId=${competitionId} raceId=${raceId}`
+      `Skipping day leaderboard write: invalid day="${String(day ?? "")}" competitionId=${competitionId} raceId=${raceId}`
     );
     return;
   }
 
-  const dayRef = db
+  const ref = db
     .collection("competitions")
     .doc(competitionId)
     .collection("leaderboardDays")
-    .doc(safeDay);
-
-  const userRef = dayRef.collection("users").doc(userId);
+    .doc(safeDay)
+    .collection("users")
+    .doc(userId);
 
   await db.runTransaction(async (tx) => {
-    // ✅ ensure parent doc exists (otherwise your UI won't see any day docs)
-    tx.set(
-      dayRef,
-      {
-        competitionId,
-        day: safeDay,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
-
-    const snap = await tx.get(userRef);
+    const snap = await tx.get(ref);
     const existing = snap.exists ? snap.data() : {};
 
-    const raceProfits = {
-      ...(existing.raceProfits || existing.raceReturns || {}),
-    };
+    const raceProfits = { ...(existing.raceProfits || existing.raceReturns || {}) };
 
+    // Replace the per-race contribution (do NOT increment)
     raceProfits[raceId] = Number(raceReturn ?? 0);
 
+    // Recompute total deterministically
     let total = 0;
     for (const v of Object.values(raceProfits)) {
       total += Number(v ?? 0);
     }
 
     tx.set(
-      userRef,
+      ref,
       {
         userId,
         competitionId,
         day: safeDay,
         totalProfit: total,
+        // Backwards compatible field name used by the app UI:
         totalReturnInclStake: total,
         raceProfits,
         lastSettlementVersion: settlementVersion,
@@ -444,29 +363,13 @@ async function upsertCompetitionLeaderboardDayDeterministic({
 exports.settleRaceOnResult = onDocumentWritten(
   {
     document: "results/{raceId}",
-    database: "(default)", // ✅ ensure correct Firestore DB
     region: "europe-west2",
   },
   async (event) => {
     const after = event.data?.after;
+    if (!after || !after.exists) return;
 
-    // ✅ Helpful marker so you never have an empty settlement doc again
     const raceId = event.params.raceId;
-    const db = admin.firestore();
-    const settlementRef = db.collection("raceSettlements").doc(raceId);
-
-    if (!after || !after.exists) {
-      await settlementRef.set(
-        {
-          raceId,
-          status: "skipped_no_after",
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        },
-        { merge: true }
-      );
-      return;
-    }
-
     const result = after.data();
 
     const finishPositions = result.finishPositions || {};
@@ -474,14 +377,14 @@ exports.settleRaceOnResult = onDocumentWritten(
     const placeFraction = Number(result.eachWayFraction ?? 0.2);
     const competitionId = result.competitionId || null;
 
+    // ✅ NEW: Non-runner + favourite data from result doc
     const nonRunners = new Set(
       (Array.isArray(result.nonRunners) ? result.nonRunners : [])
         .map((x) => String(x ?? "").trim())
         .filter(Boolean)
     );
     const favouriteHorseId = String(result.favouriteHorseId ?? "").trim();
-    const favouriteHorseName =
-      String(result.favouriteHorseName ?? "").trim() || null;
+    const favouriteHorseName = String(result.favouriteHorseName ?? "").trim() || null;
 
     if (nonRunners.size > 0 && !favouriteHorseId) {
       logger.warn(
@@ -489,63 +392,41 @@ exports.settleRaceOnResult = onDocumentWritten(
       );
     }
 
+    const db = admin.firestore();
+    const settlementRef = db.collection("raceSettlements").doc(raceId);
     const usersSubcolRef = settlementRef.collection("users");
 
+    // --------------------------------------------------
+    // Backfill map: horseName -> horseId (race runners)
+    // --------------------------------------------------
     let horseNameToId = null;
     let raceDay = null;
 
     try {
-  const raceSnap = await db.doc(`races/${raceId}`).get();
+      const raceSnap = await db.doc(`races/${raceId}`).get();
+      if (raceSnap.exists) {
+        const race = raceSnap.data() || {};
+        raceDay = normalizeDayKey(race.date);
 
-  let rawRaceDate = null;
+        horseNameToId = new Map();
+        (race.runners || []).forEach((r) => {
+          if (!r?.horseName || !r?.horseId) return;
+          horseNameToId.set(normName(r.horseName), String(r.horseId).trim());
+        });
 
-  if (raceSnap.exists) {
-    const race = raceSnap.data() || {};
-    rawRaceDate = race.date ?? null;
+        if (!raceDay && race?.date) {
+          logger.warn(
+            `Race ${raceId} has non-ISO date="${String(race.date)}" - day leaderboard will be skipped until fixed (recommended: store YYYY-MM-DD).`
+          );
+        }
+      }
+    } catch (err) {
+      logger.error(`Failed to load race runners for ${raceId}`, err);
+    }
 
-    // ✅ Prefer race.date
-    raceDay = normalizeDayKey(race.date);
-
-    // Build horseName -> horseId map (for older tips without horseId)
-    horseNameToId = new Map();
-    (race.runners || []).forEach((r) => {
-      if (!r?.horseName || !r?.horseId) return;
-      horseNameToId.set(normName(r.horseName), String(r.horseId).trim());
-    });
-  }
-
-  // ✅ Fallback to result.date if race missing/invalid date OR race doc missing
-  if (!raceDay) {
-    raceDay = normalizeDayKey(result.date);
-    logger.info("Using result.date fallback for raceDay", {
-      raceId,
-      resultDate: result.date ?? null,
-      normalized: raceDay,
-    });
-  }
-
-  // ✅ Debug log that will never throw
-  logger.info("Race day normalization", {
-    raceId,
-    raceDocExists: raceSnap.exists,
-    rawRaceDate,
-    resultDate: result.date ?? null,
-    normalized: raceDay,
-  });
-
-  // If we still can't normalize, warn loudly
-  if (!raceDay) {
-    logger.warn("Day leaderboard will be skipped (could not normalize day)", {
-      raceId,
-      rawRaceDate,
-      resultDate: result.date ?? null,
-      competitionId,
-    });
-  }
-} catch (err) {
-  logger.error(`Failed to load race runners for ${raceId}`, err);
-}
-
+    // ------------------------------------------
+    // 2) Build officialOddsByHorseId from result
+    // ------------------------------------------
     const officialOddsByHorseId = {};
     const officialOddsDecimalByHorseId = {};
 
@@ -559,7 +440,7 @@ exports.settleRaceOnResult = onDocumentWritten(
           if (!horseId) {
             if (!nameToId) {
               const raceSnap = await db.doc(`races/${raceId}`).get();
-              const race = raceSnap.exists ? raceSnap.data() || {} : {};
+              const race = raceSnap.exists ? (raceSnap.data() || {}) : {};
 
               nameToId = new Map();
               (race.runners || []).forEach((r) => {
@@ -579,9 +460,7 @@ exports.settleRaceOnResult = onDocumentWritten(
             continue;
           }
 
-          const oddsDisplay = String(
-            p?.oddsDisplay ?? p?.oddsInput ?? ""
-          ).trim();
+          const oddsDisplay = String(p?.oddsDisplay ?? p?.oddsInput ?? "").trim();
           if (oddsDisplay) officialOddsByHorseId[horseId] = oddsDisplay;
 
           const od = p?.oddsDecimal;
@@ -591,37 +470,34 @@ exports.settleRaceOnResult = onDocumentWritten(
         }
 
         logger.info(
-          `Built official odds map for race ${raceId}. entries=${Object.keys(
-            officialOddsByHorseId
-          ).length}`
+          `Built official odds map for race ${raceId}. entries=${Object.keys(officialOddsByHorseId).length}`
         );
       } else {
-        logger.info(
-          `No placements on result for race ${raceId}; no official odds map built.`
-        );
+        logger.info(`No placements on result for race ${raceId}; no official odds map built.`);
       }
     } catch (err) {
       logger.error(`Failed building official odds map for race ${raceId}`, err);
     }
 
+    // --------------------------------------------------
+    // Backfill map from RESULTS placements (preferred)
+    // tip.horseName -> horseId using result.placements
+    // --------------------------------------------------
     const placementNameToHorseId = new Map();
     try {
       if (Array.isArray(result.placements)) {
         result.placements.forEach((p) => {
           if (!p?.horseId || !p?.horseName) return;
-          placementNameToHorseId.set(
-            normName(p.horseName),
-            String(p.horseId).trim()
-          );
+          placementNameToHorseId.set(normName(p.horseName), String(p.horseId).trim());
         });
       }
     } catch (err) {
-      logger.error(
-        `Failed building placementNameToHorseId map for race ${raceId}`,
-        err
-      );
+      logger.error(`Failed building placementNameToHorseId map for race ${raceId}`, err);
     }
 
+    // -------------------------
+    // 1) Acquire a simple lock
+    // -------------------------
     const runId = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
     const lockMs = 2 * 60 * 1000;
 
@@ -634,9 +510,7 @@ exports.settleRaceOnResult = onDocumentWritten(
       const status = data?.status;
 
       if (status === "settling" && lockedUntil > now) {
-        throw new Error(
-          `Settlement is already running for race ${raceId} (lock active)`
-        );
+        throw new Error(`Settlement is already running for race ${raceId} (lock active)`);
       }
 
       const currentVersion = Number(data?.settlementVersion ?? 0);
@@ -660,10 +534,11 @@ exports.settleRaceOnResult = onDocumentWritten(
       return { settlementVersion: currentVersion };
     });
 
-    logger.info(
-      `Settling race ${raceId} runId=${runId} version=${settlementVersion}`
-    );
+    logger.info(`Settling race ${raceId} runId=${runId} version=${settlementVersion}`);
 
+    // ------------------------------------------
+    // 2) Load existing user settlements (old)
+    // ------------------------------------------
     const existingSettSnap = await usersSubcolRef.get();
     const oldByUserId = new Map();
     existingSettSnap.forEach((doc) => {
@@ -673,25 +548,12 @@ exports.settleRaceOnResult = onDocumentWritten(
       oldByUserId.set(doc.id, { oldVal, oldProfit, docRef: doc.ref, data: d });
     });
 
-    const tipsSnap = await db
-      .collection("tips")
-      .where("raceId", "==", raceId)
-      .get();
+    // ------------------------------------------
+    // 3) Load current tips for this race
+    // ------------------------------------------
+    const tipsSnap = await db.collection("tips").where("raceId", "==", raceId).get();
 
     logger.info(`Found ${tipsSnap.size} tips for race ${raceId}`);
-
-    // ✅ marker if no tips — you will see it in Firestore
-    if (tipsSnap.size === 0) {
-      await settlementRef.set(
-        {
-          status: "skipped_no_tips",
-          tipsFound: 0,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        },
-        { merge: true }
-      );
-      return;
-    }
 
     const newByUserId = new Map();
     let tipsSkipped = 0;
@@ -806,6 +668,9 @@ exports.settleRaceOnResult = onDocumentWritten(
       });
     });
 
+    // ------------------------------------------
+    // 4) Settlement + user aggregate writes (delta)
+    // ------------------------------------------
     const nextVersion = Number(settlementVersion ?? 0) + 1;
 
     const writes = [];
@@ -872,9 +737,7 @@ exports.settleRaceOnResult = onDocumentWritten(
             userAggRef,
             {
               totalReturnInclStake: admin.firestore.FieldValue.increment(-oldVal),
-              totalProfit: admin.firestore.FieldValue.increment(
-                -(Number(oldInfo.oldProfit ?? 0))
-              ),
+              totalProfit: admin.firestore.FieldValue.increment(-(Number(oldInfo.oldProfit ?? 0))),
               updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             },
             { merge: true }
@@ -917,6 +780,9 @@ exports.settleRaceOnResult = onDocumentWritten(
       `Race ${raceId} settled. version=${nextVersion} tipsWritten=${tipsWritten} tipsRemoved=${tipsRemoved} tipsSkipped=${tipsSkipped} usersDelta=${totalDeltaAppliedUsers} competitionId=${competitionId}`
     );
 
+    // ------------------------------------------
+    // 6) Competition leaderboards: deterministic per-race value
+    // ------------------------------------------
     if (competitionId && compLeaderboardWork.length > 0) {
       for (const item of compLeaderboardWork) {
         try {
