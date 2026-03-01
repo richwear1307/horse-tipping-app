@@ -1613,7 +1613,9 @@ function AdminEntrantsScreen({
         uid,
         displayName: displayName || "(No screen name)",
         sortKey: (displayName || "").toLowerCase(),
-        registered: activeCompetitionId ? registeredIds.includes(activeCompetitionId) : false,
+        registered: activeCompetitionId
+          ? registeredIds.includes(activeCompetitionId)
+          : false,
       };
     });
 
@@ -1629,19 +1631,54 @@ function AdminEntrantsScreen({
       const userRef = doc(firestoreDb, "users", uid);
 
       if (nextVal) {
-        // ✅ add competition id to array
+        // ✅ 1) add competition id to user profile
         await setDoc(
           userRef,
           { registeredCompetitionIds: arrayUnion(activeCompetitionId) },
           { merge: true }
         );
+
+        // ✅ 2) create/ensure overall leaderboard doc exists immediately
+        // competitions/{competitionId}/leaderboard/{uid}
+        const overallRef = doc(
+          firestoreDb,
+          "competitions",
+          activeCompetitionId,
+          "leaderboard",
+          uid
+        );
+
+        const displayNameLower = String(usersMap?.[uid]?.displayName ?? "")
+          .trim()
+          .toLowerCase();
+
+        await setDoc(
+          overallRef,
+          {
+            // required for leaderboard query + UI
+            totalReturnInclStake: 0,
+            tips: 0,
+
+            // tie-breaker fields (optional but recommended)
+            createdAt: serverTimestamp(),
+            displayNameLower,
+
+            // nice-to-have
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true } // don't clobber later aggregation writes
+        );
       } else {
-        // ✅ remove competition id from array
+        // ✅ remove competition id from user profile
         await setDoc(
           userRef,
           { registeredCompetitionIds: arrayRemove(activeCompetitionId) },
           { merge: true }
         );
+
+        // Note: we intentionally do NOT delete the leaderboard doc.
+        // Your LeaderboardScreen can continue filtering to registered users,
+        // which will hide unregistered users without losing historical data.
       }
     } catch (e) {
       showMessage("Save failed", e.message);
@@ -1650,13 +1687,18 @@ function AdminEntrantsScreen({
 
   return (
     <View style={styles.container}>
-      <ScrollView style={styles.content} contentContainerStyle={{ paddingBottom: 40 }}>
+      <ScrollView
+        style={styles.content}
+        contentContainerStyle={{ paddingBottom: 40 }}
+      >
         <Text style={styles.title}>Manage entrants</Text>
 
         <View style={[styles.card, { marginTop: 8 }]}>
           <Text style={styles.h2}>Active competition</Text>
           <Text style={styles.cardTitle}>
-            {activeCompetition?.name ? activeCompetition.name : "No active competition set"}
+            {activeCompetition?.name
+              ? activeCompetition.name
+              : "No active competition set"}
           </Text>
           <Text style={styles.cardHint}>
             Toggle an entrant on to register them for this competition.
@@ -1848,7 +1890,7 @@ const sendMagicLink = async () => {
                       disabled={busy}
                     >
                       <Text style={styles.buttonText}>
-                        {busy ? "Working…" : "Email me a sign-in link"}
+                        {busy ? "Working…" : "Sign in using email link (no password)"}
                       </Text>
                     </Pressable>
 
@@ -3190,7 +3232,7 @@ function LeaderboardScreen({
   currentUserId,
   onBack,
   activeCompetitionId,
-  registeredUserIds,
+  // registeredUserIds, // ✅ no longer needed (we compute from usersMap)
 }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -3202,17 +3244,7 @@ function LeaderboardScreen({
   const LEADER_ROW_HEIGHT = 74;
   const listRef = React.useRef(null);
 
-  // Uncomment if you need to debug which competition is being used
-  // useEffect(() => {
-  //   console.log("Leaderboard activeCompetitionId:", activeCompetitionId);
-  // }, [activeCompetitionId]);
-
-  // Uncomment if you need to debug whether days are being loaded
-  // useEffect(() => {
-  //   console.log("Leaderboard days state:", days);
-  // }, [days]);
-
-  // Load user profiles (for display names)
+  // Load user profiles (for display names + registration status)
   useEffect(() => {
     const unsub = onSnapshot(
       collection(firestoreDb, "users"),
@@ -3228,6 +3260,20 @@ function LeaderboardScreen({
 
     return unsub;
   }, []);
+
+  // ✅ Build a Set of registered userIds for the active competition (Option A)
+  const registeredSet = React.useMemo(() => {
+    if (!activeCompetitionId) return null;
+
+    const set = new Set();
+    Object.entries(usersMap || {}).forEach(([uid, u]) => {
+      const ids = Array.isArray(u?.registeredCompetitionIds)
+        ? u.registeredCompetitionIds
+        : [];
+      if (ids.includes(activeCompetitionId)) set.add(uid);
+    });
+    return set;
+  }, [usersMap, activeCompetitionId]);
 
   // ✅ Load competition days from competitions/{id}.days (source of truth)
   useEffect(() => {
@@ -3266,6 +3312,13 @@ function LeaderboardScreen({
     return unsub;
   }, [activeCompetitionId]);
 
+  // ✅ If no days exist yet, default to overall (prevents "empty" before first result)
+  useEffect(() => {
+    if (mode === "day" && (!days || days.length === 0)) {
+      setMode("overall");
+    }
+  }, [mode, days]);
+
   // Load leaderboard rows based on mode + selectedDay
   useEffect(() => {
     if (!activeCompetitionId) {
@@ -3303,6 +3356,7 @@ function LeaderboardScreen({
     const q = query(
       baseCollection,
       orderBy("totalReturnInclStake", "desc"),
+      orderBy("createdAt", "asc"), // secondary sort for ties
       limit(200)
     );
 
@@ -3314,11 +3368,9 @@ function LeaderboardScreen({
           ...d.data(),
         }));
 
-        const restrictToRegistered =
-          Array.isArray(registeredUserIds) && registeredUserIds.length > 0;
-
-        const filtered = restrictToRegistered
-          ? list.filter((r) => registeredUserIds.includes(r.userId))
+        // ✅ Option A: Hide unregistered users (do NOT delete docs)
+        const filtered = registeredSet
+          ? list.filter((r) => registeredSet.has(r.userId))
           : list;
 
         const withNames = filtered.map((r) => ({
@@ -3341,7 +3393,7 @@ function LeaderboardScreen({
     );
 
     return unsub;
-  }, [activeCompetitionId, registeredUserIds, usersMap, mode, selectedDay]);
+  }, [activeCompetitionId, usersMap, registeredSet, mode, selectedDay]);
 
   const myIndex = rows.findIndex((r) => r.userId === currentUserId);
   const myRow = myIndex >= 0 ? rows[myIndex] : null;
@@ -3371,21 +3423,20 @@ function LeaderboardScreen({
     });
   };
 
-const renderSegment = (label, isActive, onPress) => (
-  <Pressable
-    onPress={onPress}
-    style={[
-      styles.smallChoice,
-      { flex: 1 },                 // keeps equal width like segments
-      isActive && styles.cardActive,
-    ]}
-  >
-    <Text style={styles.smallChoiceText} numberOfLines={1}>
-      {label}
-    </Text>
-  </Pressable>
-);
-
+  const renderSegment = (label, isActive, onPress) => (
+    <Pressable
+      onPress={onPress}
+      style={[
+        styles.smallChoice,
+        { flex: 1 }, // keeps equal width like segments
+        isActive && styles.cardActive,
+      ]}
+    >
+      <Text style={styles.smallChoiceText} numberOfLines={1}>
+        {label}
+      </Text>
+    </Pressable>
+  );
 
   return (
     <View style={styles.container}>
@@ -3393,51 +3444,49 @@ const renderSegment = (label, isActive, onPress) => (
         <Text style={styles.title}>Leaderboard</Text>
 
         {/* ✅ My Tips–style segmented selector: days + overall */}
-<View style={styles.segmentWrap}>
-
-  {/* OVERALL – full width */}
-  <Pressable
-    onPress={() => setMode("overall")}
-    style={[
-      styles.smallChoice,
-      styles.overallChoice,
-      mode === "overall" && styles.cardActive,
-    ]}
-  >
-    <Text style={styles.smallChoiceText}>Overall</Text>
-  </Pressable>
-
-  {/* DAY BUTTONS */}
-  <View style={styles.segmentRow}>
-    {days.map((d) => {
-      const active = mode === "day" && selectedDay === d;
-
-      return (
-        <Pressable
-          key={d}
-          onPress={() => {
-            setMode("day");
-            setSelectedDay(d);
-          }}
-          style={[
-            styles.smallChoice,
-            styles.dayChoice,
-            active && styles.cardActive,
-          ]}
-        >
-          <Text
-            style={styles.smallChoiceText}
-            numberOfLines={1}
-            ellipsizeMode="tail"
+        <View style={styles.segmentWrap}>
+          {/* OVERALL – full width */}
+          <Pressable
+            onPress={() => setMode("overall")}
+            style={[
+              styles.smallChoice,
+              styles.overallChoice,
+              mode === "overall" && styles.cardActive,
+            ]}
           >
-            {formatDayLabel(d)}
-          </Text>
-        </Pressable>
-      );
-    })}
-  </View>
-</View>
+            <Text style={styles.smallChoiceText}>Overall</Text>
+          </Pressable>
 
+          {/* DAY BUTTONS */}
+          <View style={styles.segmentRow}>
+            {days.map((d) => {
+              const active = mode === "day" && selectedDay === d;
+
+              return (
+                <Pressable
+                  key={d}
+                  onPress={() => {
+                    setMode("day");
+                    setSelectedDay(d);
+                  }}
+                  style={[
+                    styles.smallChoice,
+                    styles.dayChoice,
+                    active && styles.cardActive,
+                  ]}
+                >
+                  <Text
+                    style={styles.smallChoiceText}
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                  >
+                    {formatDayLabel(d)}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
 
         {loading ? (
           <Text style={styles.subtitle}>Loading leaderboard…</Text>
@@ -3472,7 +3521,7 @@ const renderSegment = (label, isActive, onPress) => (
                 {mode === "overall"
                   ? "No overall results yet."
                   : selectedDay
-                  ? `No results for ${selectedDay} yet.`
+                  ? `This leaderboard will show once the first race is confirmed.`
                   : "No results yet."}
               </Text>
             ) : (
@@ -3482,7 +3531,9 @@ const renderSegment = (label, isActive, onPress) => (
                 keyExtractor={(item) => item.userId}
                 style={{ flex: 1, marginTop: 10 }}
                 contentContainerStyle={{ paddingBottom: 16 }}
-                ListFooterComponent={<View style={{ height: FOOTER_HEIGHT + 28 }} />}
+                ListFooterComponent={
+                  <View style={{ height: FOOTER_HEIGHT + 28 }} />
+                }
                 getItemLayout={(_, index) => ({
                   length: LEADER_ROW_HEIGHT,
                   offset: LEADER_ROW_HEIGHT * index,
