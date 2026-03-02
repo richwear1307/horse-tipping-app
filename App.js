@@ -2353,6 +2353,7 @@ const toggleRace = (raceId) => {
                   </Pressable>
 
                   {/* EXPANDED CONTENT */}
+{/* EXPANDED CONTENT */}
 {isOpen && (
   <View style={{ marginTop: 10 }}>
     {!res ? (
@@ -2374,15 +2375,19 @@ const toggleRace = (raceId) => {
           return <Text style={styles.cardHint}>Result: pending</Text>;
         }
 
+        // Count tips for a specific horse in this race
+        const countTipsForHorse = (raceId, horseName) => {
+          if (!horseName) return 0;
+          const list = allTips ?? [];
+          return list.filter((t) => t?.raceId === raceId && t?.horseName === horseName).length;
+        };
+
+        const tipLabel = (n) => `${n} ${n === 1 ? "tip" : "tips"}`;
+
         return (
           <>
-            {/* Winner tips count (winner only) */}
-            <Text style={styles.cardHint}>
-              Winning tips: {countWinningTips(r.id, getWinnerHorse(res))}
-            </Text>
-
-            {/* Show ALL placed horses including winner */}
-            <View style={{ marginTop: 8, gap: 4 }}>
+            {/* Show ALL placed horses including winner, with tip counts on each row */}
+            <View style={{ marginTop: 8, gap: 6 }}>
               {sortedPlacements.map((p) => {
                 const pos = Number(p.position);
                 const posLabel =
@@ -2394,10 +2399,21 @@ const toggleRace = (raceId) => {
                 const odds =
                   p.oddsDisplay || (p.oddsDecimal ? String(p.oddsDecimal) : "—");
 
+                const tips = countTipsForHorse(r.id, p.horseName);
+
                 return (
-                  <Text key={`${r.id}_${pos}_${p.horseName}`} style={styles.cardHint}>
-                    {posLabel}: {p.horseName} {odds !== "—" ? `(${odds})` : ""}
-                  </Text>
+                  <View
+                    key={`${r.id}_${pos}_${p.horseName}`}
+                    style={styles.placementRow}
+                  >
+                    <Text style={[styles.cardHint, styles.placementText]}>
+                      {posLabel}: {p.horseName} {odds !== "—" ? `(${odds})` : ""}
+                    </Text>
+
+                    <View style={styles.tipsPill}>
+                      <Text style={styles.tipsPillText}>{tipLabel(tips)}</Text>
+                    </View>
+                  </View>
                 );
               })}
             </View>
@@ -2422,6 +2438,7 @@ const toggleRace = (raceId) => {
 function ProfileScreen({ user, onBack }) {
   const [loading, setLoading] = useState(true);
   const [displayName, setDisplayName] = useState("");
+  const [email, setEmail] = useState(""); // ✅ NEW
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -2432,6 +2449,8 @@ function ProfileScreen({ user, onBack }) {
       (snap) => {
         const data = snap.exists() ? snap.data() : null;
         setDisplayName(data?.displayName ?? "");
+        // ✅ NEW: prefer Firestore email, fallback to auth user email
+        setEmail(data?.email ?? user.email ?? "");
         setLoading(false);
       },
       (err) => {
@@ -2441,7 +2460,7 @@ function ProfileScreen({ user, onBack }) {
     );
 
     return unsub;
-  }, [user.uid]);
+  }, [user.uid, user.email]);
 
   const save = async () => {
     if (!displayName) {
@@ -2471,7 +2490,7 @@ function ProfileScreen({ user, onBack }) {
         doc(firestoreDb, "users", user.uid),
         {
           displayName: displayName, // EXACTLY as typed
-          email: user.email ?? "",
+          email: user.email ?? email ?? "", // ✅ NEW: saved alongside name
           updatedAt: serverTimestamp(),
         },
         { merge: true }
@@ -2488,35 +2507,50 @@ function ProfileScreen({ user, onBack }) {
   return (
     <View style={styles.container}>
       <View style={styles.content}>
-      <Text style={styles.title}>Profile</Text>
+        <Text style={styles.title}>Profile</Text>
 
-      {loading ? (
-        <Text style={styles.subtitle}>Loading profile…</Text>
-      ) : (
-        <>
-          <Text style={styles.subtitle}>Display name (shown on leaderboard)</Text>
+        {loading ? (
+          <Text style={styles.subtitle}>Loading profile…</Text>
+        ) : (
+          <>
+            <Text style={styles.subtitle}>Display name (shown on leaderboard)</Text>
 
-          <TextInput
-            value={displayName}
-            placeholderTextColor={THEME.text3}
-            onChangeText={setDisplayName}
-            placeholder="Enter display name"
-            style={styles.input}
-          />
+            <TextInput
+              value={displayName}
+              placeholderTextColor={THEME.text3}
+              onChangeText={setDisplayName}
+              placeholder="Enter display name"
+              style={styles.input}
+            />
 
-          <Pressable
-            style={[styles.button, styles.buttonPrimary, saving ? styles.buttonDisabled : null]}
-            onPress={save}
-            disabled={saving}
-          >
-            <Text style={styles.buttonText}>{saving ? "Saving…" : "Save"}</Text>
-          </Pressable>
-        </>
-      )}
+            {/* ✅ NEW: Email field */}
+            <Text style={[styles.subtitle, { marginTop: 14 }]}>Email address</Text>
 
-      <StatusBar style="auto" />
+            <TextInput
+              value={email}
+              placeholderTextColor={THEME.text3}
+              editable={false}
+              selectTextOnFocus={false}
+              style={[styles.input, { opacity: 0.7 }]}
+            />
+
+            <Pressable
+              style={[
+                styles.button,
+                styles.buttonPrimary,
+                saving ? styles.buttonDisabled : null,
+              ]}
+              onPress={save}
+              disabled={saving}
+            >
+              <Text style={styles.buttonText}>{saving ? "Saving…" : "Save"}</Text>
+            </Pressable>
+          </>
+        )}
+
+        <StatusBar style="auto" />
+      </View>
     </View>
-  </View>
   );
 }
 
@@ -3244,6 +3278,33 @@ function LeaderboardScreen({
   const LEADER_ROW_HEIGHT = 74;
   const listRef = React.useRef(null);
 
+  // ✅ NEW: two-line day label (e.g. "Sat 28\nFeb") so it wraps like Saved Tips
+  const formatDayLabelTwoLines = (dayStr) => {
+    const s = String(dayStr ?? "").trim();
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return s;
+
+    const y = Number(m[1]);
+    const mo = Number(m[2]) - 1;
+    const da = Number(m[3]);
+
+    // Use UTC to avoid platform parsing quirks
+    const d = new Date(Date.UTC(y, mo, da));
+
+    const oneLine = d.toLocaleDateString("en-GB", {
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      timeZone: "Europe/London",
+    }); // e.g. "Sat 28 Feb"
+
+    const parts = oneLine.split(" "); // ["Sat","28","Feb"]
+    if (parts.length >= 3) {
+      return `${parts[0]} ${parts[1]}\n${parts.slice(2).join(" ")}`;
+    }
+    return oneLine;
+  };
+
   // Load user profiles (for display names + registration status)
   useEffect(() => {
     const unsub = onSnapshot(
@@ -3471,11 +3532,11 @@ function LeaderboardScreen({
                   ]}
                 >
                   <Text
-                    style={styles.smallChoiceText}
-                    numberOfLines={1}
-                    ellipsizeMode="tail"
+                    style={[styles.smallChoiceText, styles.dayTabText]}
+                    numberOfLines={2}
+                    ellipsizeMode="clip"
                   >
-                    {formatDayLabel(d)}
+                    {formatDayLabelTwoLines(d)}
                   </Text>
                 </Pressable>
               );
@@ -5426,6 +5487,38 @@ overallChoice: {
 
 dayChoice: {
   flex: 1, // evenly spreads dates across the row
+},
+
+placementRow: {
+  flexDirection: "row",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 10,
+},
+
+placementText: {
+  flex: 1,
+},
+
+tipsPill: {
+  paddingVertical: 4,
+  paddingHorizontal: 10,
+  borderRadius: 999,
+  backgroundColor: "rgba(0,0,0,0.06)",
+  borderWidth: 1,
+  borderColor: "rgba(0,0,0,0.08)",
+},
+
+tipsPillText: {
+  fontSize: 12,
+  fontWeight: "600",
+  color: "rgba(0,0,0,0.70)",
+},
+
+dayTabText: {
+  textAlign: "center",
+  lineHeight: 16,
+  flexShrink: 1,
 },
 
 });

@@ -23,6 +23,10 @@
  * IMPORTANT (FIX):
  * - leaderboardDays doc id MUST be a single safe Firestore doc id (no "/").
  * - We normalize race.date to ISO "YYYY-MM-DD" before using it as a doc id.
+ *
+ * ✅ EXTRA FIX (NEW):
+ * - Derive the day directly from raceId if possible (raceId starts with YYYY-MM-DD_...)
+ *   This avoids missing/invalid date fields on race/result documents.
  */
 
 "use strict";
@@ -192,6 +196,18 @@ function normName(s) {
     .trim()
     .toLowerCase()
     .replace(/\s+/g, " ");
+}
+
+/**
+ * ✅ NEW: Derive YYYY-MM-DD directly from a raceId if it starts with YYYY-MM-DD_
+ * Example raceId: "2026-03-01_chelt_15:20" -> "2026-03-01"
+ *
+ * ✅ FIX: trim raceId first (protect against accidental whitespace)
+ */
+function dayFromRaceId(raceId) {
+  const id = String(raceId || "").trim();
+  const m = id.match(/^(\d{4}-\d{2}-\d{2})_/);
+  return m ? m[1] : null;
 }
 
 /**
@@ -369,6 +385,10 @@ async function upsertCompetitionLeaderboardDeterministic({
 
 /**
  * ✅ FIXED: creates the parent day document so leaderboardDays queries return docs.
+ *
+ * ✅ IMPORTANT FIX (NEW):
+ * Firestore transactions require *all reads before all writes*.
+ * So we tx.get(userRef) BEFORE any tx.set().
  */
 async function upsertCompetitionLeaderboardDayDeterministic({
   db,
@@ -399,17 +419,7 @@ async function upsertCompetitionLeaderboardDayDeterministic({
   const userRef = dayRef.collection("users").doc(userId);
 
   await db.runTransaction(async (tx) => {
-    // ✅ ensure parent doc exists (otherwise your UI won't see any day docs)
-    tx.set(
-      dayRef,
-      {
-        competitionId,
-        day: safeDay,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
-
+    // ✅ READ FIRST (required by Firestore transaction rules)
     const snap = await tx.get(userRef);
     const existing = snap.exists ? snap.data() : {};
 
@@ -423,6 +433,17 @@ async function upsertCompetitionLeaderboardDayDeterministic({
     for (const v of Object.values(raceProfits)) {
       total += Number(v ?? 0);
     }
+
+    // ✅ WRITES AFTER READS
+    tx.set(
+      dayRef,
+      {
+        competitionId,
+        day: safeDay,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
 
     tx.set(
       userRef,
@@ -495,56 +516,68 @@ exports.settleRaceOnResult = onDocumentWritten(
     let raceDay = null;
 
     try {
-  const raceSnap = await db.doc(`races/${raceId}`).get();
+      const raceSnap = await db.doc(`races/${raceId}`).get();
 
-  let rawRaceDate = null;
+      let rawRaceDate = null;
 
-  if (raceSnap.exists) {
-    const race = raceSnap.data() || {};
-    rawRaceDate = race.date ?? null;
+      // ✅ NEW: most reliable source: raceId prefix
+      raceDay = dayFromRaceId(raceId);
 
-    // ✅ Prefer race.date
-    raceDay = normalizeDayKey(race.date);
+      logger.info("DAY DEBUG", {
+        raceIdRaw: raceId,
+        raceIdLength: String(raceId || "").length,
+        derivedDay: raceDay,
+      });
 
-    // Build horseName -> horseId map (for older tips without horseId)
-    horseNameToId = new Map();
-    (race.runners || []).forEach((r) => {
-      if (!r?.horseName || !r?.horseId) return;
-      horseNameToId.set(normName(r.horseName), String(r.horseId).trim());
-    });
-  }
+      if (raceSnap.exists) {
+        const race = raceSnap.data() || {};
+        rawRaceDate = race.date ?? null;
 
-  // ✅ Fallback to result.date if race missing/invalid date OR race doc missing
-  if (!raceDay) {
-    raceDay = normalizeDayKey(result.date);
-    logger.info("Using result.date fallback for raceDay", {
-      raceId,
-      resultDate: result.date ?? null,
-      normalized: raceDay,
-    });
-  }
+        // ✅ Prefer raceId-derived day, otherwise use race.date
+        if (!raceDay) {
+          raceDay = normalizeDayKey(race.date);
+        }
 
-  // ✅ Debug log that will never throw
-  logger.info("Race day normalization", {
-    raceId,
-    raceDocExists: raceSnap.exists,
-    rawRaceDate,
-    resultDate: result.date ?? null,
-    normalized: raceDay,
-  });
+        // Build horseName -> horseId map (for older tips without horseId)
+        horseNameToId = new Map();
+        (race.runners || []).forEach((r) => {
+          if (!r?.horseName || !r?.horseId) return;
+          horseNameToId.set(normName(r.horseName), String(r.horseId).trim());
+        });
+      }
 
-  // If we still can't normalize, warn loudly
-  if (!raceDay) {
-    logger.warn("Day leaderboard will be skipped (could not normalize day)", {
-      raceId,
-      rawRaceDate,
-      resultDate: result.date ?? null,
-      competitionId,
-    });
-  }
-} catch (err) {
-  logger.error(`Failed to load race runners for ${raceId}`, err);
-}
+      // ✅ Fallback to result.date if still missing/invalid
+      if (!raceDay) {
+        raceDay = normalizeDayKey(result.date);
+        logger.info("Using result.date fallback for raceDay", {
+          raceId,
+          resultDate: result.date ?? null,
+          normalized: raceDay,
+        });
+      }
+
+      // ✅ Debug log that will never throw
+      logger.info("Race day normalization", {
+        raceId,
+        raceDocExists: raceSnap.exists,
+        rawRaceDate,
+        resultDate: result.date ?? null,
+        fromRaceId: dayFromRaceId(raceId),
+        normalized: raceDay,
+      });
+
+      // If we still can't normalize, warn loudly
+      if (!raceDay) {
+        logger.warn("Day leaderboard will be skipped (could not normalize day)", {
+          raceId,
+          rawRaceDate,
+          resultDate: result.date ?? null,
+          competitionId,
+        });
+      }
+    } catch (err) {
+      logger.error(`Failed to load race runners for ${raceId}`, err);
+    }
 
     const officialOddsByHorseId = {};
     const officialOddsDecimalByHorseId = {};
