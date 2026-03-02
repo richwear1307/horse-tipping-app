@@ -2567,10 +2567,24 @@ function ProfileScreen({ user, onBack }) {
   );
 }
 
+// ✅ NOTE: Make sure you have this import at the top of the file:
+// import { Animated } from "react-native";
+
 function RacesScreen({ races, racesLoading, activeDay, tips, onBack, onPickTip, allTips }) {
   const [now, setNow] = useState(Date.now());
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [horseSort, setHorseSort] = useState("odds"); // "odds" | "number"
+
+  // ✅ Transition anim for switching races (auto-advance + manual tab)
+  const raceTransition = useRef(new Animated.Value(1)).current;
+  const playRaceTransition = () => {
+    raceTransition.setValue(0);
+    Animated.timing(raceTransition, {
+      toValue: 1,
+      duration: 220,
+      useNativeDriver: true,
+    }).start();
+  };
 
   // Update once per minute
   useEffect(() => {
@@ -2578,46 +2592,52 @@ function RacesScreen({ races, racesLoading, activeDay, tips, onBack, onPickTip, 
     return () => clearInterval(id);
   }, []);
 
-  // Keep index valid
+  const visibleRaces = useMemo(() => {
+    if (!activeDay) return [];
+    return races.filter((r) => r.date === activeDay);
+  }, [races, activeDay]);
 
-    const visibleRaces = useMemo(() => {
-  if (!activeDay) return [];
-  return races.filter(r => r.date === activeDay);
-}, [races, activeDay]);
+  // Keep index valid
   useEffect(() => {
-if (selectedIndex > visibleRaces.length - 1) {
-  setSelectedIndex(0);
-}
-}, [visibleRaces.length, selectedIndex]);
+    if (selectedIndex > visibleRaces.length - 1) {
+      setSelectedIndex(0);
+    }
+  }, [visibleRaces.length, selectedIndex]);
 
   const selectedRace = visibleRaces[selectedIndex] ?? null;
 
+  // ✅ Play transition whenever we change selected race
+  useEffect(() => {
+    if (!selectedRace) return;
+    playRaceTransition();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedIndex]);
+
   const hotTip = useMemo(() => {
-  if (!selectedRace?.id) return null;
+    if (!selectedRace?.id) return null;
 
-  const raceTips = (allTips ?? []).filter((t) => t?.raceId === selectedRace.id);
-  if (raceTips.length === 0) return null;
+    const raceTips = (allTips ?? []).filter((t) => t?.raceId === selectedRace.id);
+    if (raceTips.length === 0) return null;
 
-  const counts = new Map();
-
-  for (const t of raceTips) {
-    const name = String(t?.horseName ?? "").trim();
-    if (!name) continue;
-    counts.set(name, (counts.get(name) ?? 0) + 1);
-  }
-
-  let bestHorse = null;
-  let bestCount = 0;
-
-  for (const [horseName, tipCount] of counts.entries()) {
-    if (tipCount > bestCount) {
-      bestHorse = horseName;
-      bestCount = tipCount;
+    const counts = new Map();
+    for (const t of raceTips) {
+      const name = String(t?.horseName ?? "").trim();
+      if (!name) continue;
+      counts.set(name, (counts.get(name) ?? 0) + 1);
     }
-  }
 
-  return bestHorse ? { horseName: bestHorse, tipCount: bestCount } : null;
-}, [allTips, selectedRace?.id]);
+    let bestHorse = null;
+    let bestCount = 0;
+
+    for (const [horseName, tipCount] of counts.entries()) {
+      if (tipCount > bestCount) {
+        bestHorse = horseName;
+        bestCount = tipCount;
+      }
+    }
+
+    return bestHorse ? { horseName: bestHorse, tipCount: bestCount } : null;
+  }, [allTips, selectedRace?.id]);
 
   // Current user's saved tip(s) for this day (one per raceId)
   const tipByRaceId = useMemo(() => {
@@ -2628,153 +2648,164 @@ if (selectedIndex > visibleRaces.length - 1) {
     return map;
   }, [tips]);
 
-const findNextUntippedIndex = (fromIndex, justTippedRaceId) => {
-  if (!visibleRaces.length) return null;
+  const findNextUntippedIndex = (fromIndex, justTippedRaceId) => {
+    if (!visibleRaces.length) return null;
 
-  for (let i = fromIndex + 1; i < visibleRaces.length; i++) {
-    const rid = visibleRaces[i]?.id;
-    const alreadyTipped = rid === justTippedRaceId || !!tipByRaceId[rid];
-    if (!alreadyTipped) return i;
-  }
+    for (let i = fromIndex + 1; i < visibleRaces.length; i++) {
+      const rid = visibleRaces[i]?.id;
+      const alreadyTipped = rid === justTippedRaceId || !!tipByRaceId[rid];
+      if (!alreadyTipped) return i;
+    }
 
-  for (let i = 0; i < fromIndex; i++) {
-    const rid = visibleRaces[i]?.id;
-    const alreadyTipped = rid === justTippedRaceId || !!tipByRaceId[rid];
-    if (!alreadyTipped) return i;
-  }
+    for (let i = 0; i < fromIndex; i++) {
+      const rid = visibleRaces[i]?.id;
+      const alreadyTipped = rid === justTippedRaceId || !!tipByRaceId[rid];
+      if (!alreadyTipped) return i;
+    }
 
-  return null; // everything is tipped
-};
+    return null; // everything is tipped
+  };
 
-const handlePickTip = async (raceId, horseName, wasSelected) => {
-  await onPickTip(raceId, horseName, wasSelected);
+  const handlePickTip = async (raceId, horseName, wasSelected) => {
+    await onPickTip(raceId, horseName, wasSelected);
 
-  if (!wasSelected) {
-    const next = findNextUntippedIndex(selectedIndex, raceId);
-    if (next !== null) setSelectedIndex(next);
-  }
-};
+    if (!wasSelected) {
+      const next = findNextUntippedIndex(selectedIndex, raceId);
+      if (next !== null) setSelectedIndex(next);
+    }
+  };
 
   const currentTipHorse =
     (selectedRace?.id && tipByRaceId[selectedRace.id]?.horseName) || null;
 
+  if (racesLoading) {
+    return (
+      <View style={styles.container}>
+        <ScrollView
+          style={styles.content}
+          contentContainerStyle={{ flexGrow: 1 }}
+          showsVerticalScrollIndicator={false}
+        >
+          <Text style={styles.title}>Upcoming Races</Text>
+          <Text style={styles.subtitle}>Loading races…</Text>
+        </ScrollView>
+      </View>
+    );
+  }
 
-if (racesLoading) {
+  if (!selectedRace) {
+    return (
+      <View style={styles.container}>
+        <ScrollView
+          style={styles.content}
+          contentContainerStyle={{ flexGrow: 1 }}
+          showsVerticalScrollIndicator={false}
+        >
+          <Text style={styles.title}>Upcoming Races</Text>
+          <Text style={styles.subtitle}>No races available.</Text>
+        </ScrollView>
+      </View>
+    );
+  }
+
+  const lockAt = selectedRace.lockAt ?? 0;
+  const remaining = lockAt ? lockAt - now : null;
+  const locked = remaining !== null && remaining <= 0;
+  const countdownText =
+    remaining === null ? "No lock time" : formatCountdownHM(remaining);
+
   return (
     <View style={styles.container}>
       <ScrollView
         style={styles.content}
-        contentContainerStyle={{ flexGrow: 1 }}
+        contentContainerStyle={{ paddingBottom: FOOTER_HEIGHT + 24 }}
         showsVerticalScrollIndicator={false}
+        stickyHeaderIndices={[1]} // 👈 the sticky child index (see below)
       >
-        <Text style={styles.title}>Upcoming Races</Text>
-        <Text style={styles.subtitle}>Loading races…</Text>
-      </ScrollView>
-    </View>
-  );
-}
+        <Text style={styles.title}>Enter my tips</Text>
 
-if (!selectedRace) {
-  return (
-    <View style={styles.container}>
-      <ScrollView
-        style={styles.content}
-        contentContainerStyle={{ flexGrow: 1 }}
-        showsVerticalScrollIndicator={false}
-      >
-        <Text style={styles.title}>Upcoming Races</Text>
-        <Text style={styles.subtitle}>No races available.</Text>
-      </ScrollView>
-    </View>
-  );
-}
+        {/* Sticky wrapper (direct child index 1) */}
+        <View style={styles.stickyRaceSelectorWrap}>
+          {/* 1–7 race selector */}
+          <View style={styles.raceSelectorRow}>
+            {visibleRaces.slice(0, 7).map((race, idx) => {
+              const active = idx === selectedIndex;
+              const hasTip = !!tipByRaceId[race.id];
+              return (
+                <Pressable
+                  key={race.id}
+                  onPress={() => setSelectedIndex(idx)}
+                  style={[
+                    styles.raceSelectorBtn,
+                    active && styles.raceSelectorBtnActive,
+                    hasTip && styles.raceSelectorBtnTipped,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.raceSelectorText,
+                      active && styles.raceSelectorTextActive,
+                      hasTip && styles.raceSelectorTextTipped,
+                    ]}
+                  >
+                    {idx + 1}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
 
-const lockAt = selectedRace.lockAt ?? 0;
-const remaining = lockAt ? lockAt - now : null;
-const locked = remaining !== null && remaining <= 0;
-const countdownText =
-  remaining === null ? "No lock time" : formatCountdownHM(remaining);
+        {/* ✅ Selected race card with transition */}
+        <Animated.View
+          style={[
+            styles.card,
+            {
+              opacity: raceTransition,
+              transform: [
+                {
+                  translateX: raceTransition.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [14, 0],
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
+          <>
+            {/* Header: title + date */}
+            <View style={styles.raceHeaderTopRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.cardTitle}>
+                  {(selectedRace.offTime ?? formatTimeUK(selectedRace.lockAt))}{" "}
+                  {selectedRace.name}
+                </Text>
+                <Text style={styles.cardSubtitle}>
+                  {formatDateShortUK(selectedRace.date)}
+                </Text>
+              </View>
+            </View>
 
-return (
-  <View style={styles.container}>
-<ScrollView
-  style={styles.content}
-  contentContainerStyle={{ paddingBottom: FOOTER_HEIGHT + 24 }}
-  showsVerticalScrollIndicator={false}
-  stickyHeaderIndices={[1]}   // 👈 the sticky child index (see below)
->
-  <Text style={styles.title}>Enter my tips</Text>
+            {/* Most tipped pill on its own row (under date, above tips close) */}
+            {hotTip?.horseName ? (
+              <View style={styles.mostTippedInlineUnder}>
+                <Flame size={18} color={THEME.primary} strokeWidth={2.5} />
+                <Text style={styles.mostTippedInlineText} numberOfLines={1}>
+                  Most tipped:{" "}
+                  <Text style={styles.mostTippedInlineHorse}>
+                    {hotTip.horseName}
+                  </Text>{" "}
+                  · {hotTip.tipCount} tip{hotTip.tipCount === 1 ? "" : "s"}
+                </Text>
+              </View>
+            ) : null}
 
-  {/* Sticky wrapper (direct child index 1) */}
-  <View style={styles.stickyRaceSelectorWrap}>
-    {/* 1–7 race selector */}
-    <View style={styles.raceSelectorRow}>
-      {visibleRaces.slice(0, 7).map((race, idx) => {
-        const active = idx === selectedIndex;
-        const hasTip = !!tipByRaceId[race.id];
-        return (
-          <Pressable
-            key={race.id}
-            onPress={() => setSelectedIndex(idx)}
-            style={[
-              styles.raceSelectorBtn,
-              active && styles.raceSelectorBtnActive,
-              hasTip && styles.raceSelectorBtnTipped,
-            ]}
-          >
-            <Text
-              style={[
-                styles.raceSelectorText,
-                active && styles.raceSelectorTextActive,
-                hasTip && styles.raceSelectorTextTipped,
-              ]}
-            >
-              {idx + 1}
+            <Text style={styles.cardHint}>
+              {locked ? "Tips closed" : "Tips close in"}: {countdownText}
             </Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  </View>
 
-      {/* Selected race card */}
-      <View style={styles.card}>
-        <>
-{/* Header + Hot tips row */}
-<View style={styles.headerWithHotTips}>
-  {/* Left: race title + date */}
-  <View style={{ flex: 1 }}>
-    <Text style={styles.cardTitle}>
-      {(selectedRace.offTime ?? formatTimeUK(selectedRace.lockAt))}{" "}
-      {selectedRace.name}
-    </Text>
-    <Text style={styles.cardSubtitle}>
-  {formatDateShortUK(selectedRace.date)}
-</Text>
-  </View>
-
-  {/* Right: Hot tips square */}
-  <View style={styles.hotTipsSquare}>
-    <Flame size={22} color={THEME.primary} strokeWidth={2.5} />
-    <Text style={styles.hotTipsTitle}>Most tipped</Text>
-
-    <Text style={styles.hotTipsHorse} numberOfLines={1}>
-      {hotTip?.horseName ?? "—"}
-    </Text>
-
-    {hotTip?.tipCount ? (
-      <Text style={styles.hotTipsMeta}>
-        {hotTip.tipCount} tip{hotTip.tipCount === 1 ? "" : "s"}
-      </Text>
-    ) : null}
-  </View>
-</View>
-
-          <Text style={styles.cardHint}>
-            {locked ? "Tips closed" : "Tips close in"}: {countdownText}
-          </Text>
-
-                      <>
+            <>
               {/* Sort toggles */}
               <View style={styles.sortRow}>
                 <Pressable
@@ -2826,25 +2857,25 @@ return (
                           oddsDecimal: 0,
                         }));
 
-const withSortKeys = raw.map((r) => {
-  const od =
-    Number(r.oddsDecimal) > 0
-      ? Number(r.oddsDecimal)
-      : fractionalToDecimal(r.oddsDisplay) ?? 9999;
+                  const withSortKeys = raw.map((r) => {
+                    const od =
+                      Number(r.oddsDecimal) > 0
+                        ? Number(r.oddsDecimal)
+                        : fractionalToDecimal(r.oddsDisplay) ?? 9999;
 
-  return {
-    ...r,
-    number: Number(r.number) || 0,
-    horseName: String(r.horseName ?? "").trim(),
-    oddsDisplay: String(r.oddsDisplay ?? "").trim(),
+                    return {
+                      ...r,
+                      number: Number(r.number) || 0,
+                      horseName: String(r.horseName ?? "").trim(),
+                      oddsDisplay: String(r.oddsDisplay ?? "").trim(),
 
-    // ✅ Ensure jockey/trainer exist on the object used by the UI
-    jockey: String(r.jockey ?? r.jockeyName ?? "").trim(),
-    trainer: String(r.trainer ?? r.trainerName ?? "").trim(),
+                      // Ensure jockey/trainer exist on the object used by the UI
+                      jockey: String(r.jockey ?? r.jockeyName ?? "").trim(),
+                      trainer: String(r.trainer ?? r.trainerName ?? "").trim(),
 
-    _oddsKey: od,
-  };
-});
+                      _oddsKey: od,
+                    };
+                  });
 
                   const sorted = withSortKeys
                     .filter((r) => r.horseName)
@@ -2859,9 +2890,14 @@ const withSortKeys = raw.map((r) => {
                       r.oddsDisplay ||
                       (r._oddsKey !== 9999 ? String(r._oddsKey) : "—");
 
-                    const tippedHorseId = String(tipByRaceId?.[selectedRace.id]?.horseId ?? "").trim();
-const runnerHorseId = String(r.horseId ?? "").trim();
-const isSelected = tippedHorseId && runnerHorseId && tippedHorseId === runnerHorseId;
+                    const tippedHorseId = String(
+                      tipByRaceId?.[selectedRace.id]?.horseId ?? ""
+                    ).trim();
+                    const runnerHorseId = String(r.horseId ?? "").trim();
+                    const isSelected =
+                      tippedHorseId &&
+                      runnerHorseId &&
+                      tippedHorseId === runnerHorseId;
 
                     return (
                       <Pressable
@@ -2873,48 +2909,59 @@ const isSelected = tippedHorseId && runnerHorseId && tippedHorseId === runnerHor
                           isSelected && styles.runnerCardSelected,
                         ]}
                         disabled={locked}
-                        onPress={() => handlePickTip(selectedRace.id, r.horseName, isSelected)}
+                        onPress={() =>
+                          handlePickTip(selectedRace.id, r.horseName, isSelected)
+                        }
                       >
-                        <View style={styles.runnerRow}>
-                          <View style={styles.runnerInsetLeft}>
-                            <Text style={styles.runnerInsetText}>
-                              {r.number || "—"}
-                            </Text>
+                        {/* ✅ UPDATED RUNNER LAYOUT (PICK under number, tall odds on right) */}
+                        <View style={styles.runnerRowNew}>
+                          {/* LEFT STACK: number + PICK */}
+                          <View style={styles.runnerLeftStack}>
+                            <View style={styles.runnerInsetLeftUnified}>
+                              <Text style={styles.runnerInsetText}>
+                                {r.number || "—"}
+                              </Text>
+                            </View>
+
+                            <View style={styles.pickUnderNumberPill}>
+                              <Text style={styles.pickUnderNumberText}>
+                                {isSelected ? "PICKED" : "PICK"}
+                              </Text>
+                            </View>
                           </View>
 
-<View style={styles.runnerCenter}>
-  <Text style={styles.runnerName} numberOfLines={1}>
-    {r.horseName}
-  </Text>
+                          {/* CENTER: name + meta */}
+                          <View style={styles.runnerMain}>
+                            <Text style={styles.runnerName} numberOfLines={1}>
+                              {r.horseName}
+                            </Text>
 
-  {(r.jockey || r.trainer) ? (
-    <View style={styles.runnerMetaRow}>
-      {r.jockey ? (
-        <View style={styles.metaGroup}>
-          <Text style={styles.metaBadge}>J</Text>
-          <Text style={styles.runnerMetaText} numberOfLines={1}>
-            {r.jockey}
-          </Text>
-        </View>
-      ) : null}
+                            {(r.jockey || r.trainer) ? (
+                              <View style={styles.runnerMetaStack}>
+                                {r.jockey ? (
+                                  <View style={[styles.metaGroup, { marginBottom: 2 }]}>
+                                    <Text style={styles.metaBadge}>J</Text>
+                                    <Text style={styles.runnerMetaText} numberOfLines={1}>
+                                      {r.jockey}
+                                    </Text>
+                                  </View>
+                                ) : null}
 
-      {r.trainer ? (
-        <View style={styles.metaGroup}>
-          <Text style={styles.metaBadge}>T</Text>
-          <Text style={styles.runnerMetaText} numberOfLines={1}>
-            {r.trainer}
-          </Text>
-        </View>
-      ) : null}
-    </View>
-  ) : null}
-</View>
+                                {r.trainer ? (
+                                  <View style={styles.metaGroup}>
+                                    <Text style={styles.metaBadge}>T</Text>
+                                    <Text style={styles.runnerMetaText} numberOfLines={1}>
+                                      {r.trainer}
+                                    </Text>
+                                  </View>
+                                ) : null}
+                              </View>
+                            ) : null}
+                          </View>
 
-                          <View style={styles.runnerInsetRight}>
-                            <Text
-                              style={styles.runnerInsetText}
-                              numberOfLines={1}
-                            >
+                          {/* RIGHT: tall odds box */}
+                          <View style={styles.oddsTallBox}>
+                            <Text style={styles.runnerInsetText} numberOfLines={1}>
                               {oddsLabel}
                             </Text>
                           </View>
@@ -2925,14 +2972,15 @@ const isSelected = tippedHorseId && runnerHorseId && tippedHorseId === runnerHor
                 })()}
               </View>
             </>
-        </>
-      </View>
+          </>
+        </Animated.View>
 
-      <StatusBar style="auto" />
-    </ScrollView>
-  </View>
-);
+        <StatusBar style="auto" />
+      </ScrollView>
+    </View>
+  );
 }
+
 function RaceDetailsScreen({ race, initialHorse, onBack, onSubmitTip }) {
   const [selectedHorse, setSelectedHorse] = useState(initialHorse ?? null);
 
@@ -5387,15 +5435,23 @@ runnerMetaIcon: {
 },
 
 runnerMetaText: {
-  fontSize: 10,
-  fontWeight: "700",
+  fontSize: 12,
   color: THEME.text2,
+  flexShrink: 1,
 },
 
 runnerMetaRow: {
-  flexDirection: "row",
-  flexWrap: "wrap",
+  flexDirection: "column",   // ✅ stack J above T
+  alignItems: "flex-start",
   marginTop: 2,
+  gap: 4,                    // smaller vertical gap
+},
+
+metaGroup: {
+  flexDirection: "row",
+  alignItems: "center",
+  gap: 6,
+  flexShrink: 1,
 },
 
 runnerMetaLineSingle: {
@@ -5623,12 +5679,6 @@ rankCardAmount: {
   color: THEME.text2,
 },
 
-runnerMetaRow: {
-  flexDirection: "row",
-  alignItems: "center",
-  marginTop: 2,
-  gap: 12,
-},
 
 metaGroup: {
   flexDirection: "row",
@@ -5652,6 +5702,170 @@ runnerMetaText: {
   fontSize: 12,
   color: THEME.text2,
   flexShrink: 1,
+},
+
+raceHeaderTopRow: {
+  flexDirection: "row",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 10,
+  marginBottom: 6,
+},
+
+mostTippedInline: {
+  flexDirection: "row",
+  alignItems: "center",
+  gap: 8,
+  paddingVertical: 6,
+  paddingHorizontal: 10,
+  borderRadius: 12,
+  backgroundColor: "rgba(255, 170, 0, 0.12)",
+  borderWidth: 1,
+  borderColor: "rgba(255, 170, 0, 0.25)",
+  maxWidth: 210,
+},
+
+mostTippedInlineText: {
+  fontSize: 12,
+  color: THEME.text2,
+  fontWeight: "600",
+  flexShrink: 1,
+},
+
+mostTippedInlineHorse: {
+  color: THEME.text1,
+  fontWeight: "800",
+},
+
+mostTippedInlineUnder: {
+  flexDirection: "row",
+  alignItems: "center",
+  gap: 8,
+  paddingVertical: 6,
+  paddingHorizontal: 10,
+  borderRadius: 12,
+  backgroundColor: "rgba(255, 170, 0, 0.12)",
+  borderWidth: 1,
+  borderColor: "rgba(255, 170, 0, 0.25)",
+  marginTop: 8,
+  marginBottom: 8, // gives breathing room before "Tips close in"
+  alignSelf: "flex-start", // keeps it neatly under the date, not stretched
+},
+
+runnerRowTop: {
+  flexDirection: "row",
+  alignItems: "flex-start",
+},
+
+runnerInsetLeftTop: {
+  alignSelf: "flex-start",
+  marginTop: 2,
+},
+
+runnerMain: {
+  flex: 1,
+  paddingLeft: 10,
+},
+
+runnerMetaUnderNumber: {
+  marginTop: 4,
+  marginLeft: -10,
+},
+
+runnerRightCol: {
+  alignItems: "flex-end",
+  gap: 6,
+  minWidth: 80,
+},
+
+pickCtaPill: {
+  paddingHorizontal: 10,
+  paddingVertical: 5,
+  borderRadius: 12,
+  backgroundColor: "rgba(0,0,0,0.06)",
+  borderWidth: 1,
+  borderColor: "rgba(0,0,0,0.08)",
+},
+
+pickCtaText: {
+  fontSize: 12,
+  fontWeight: "800",
+  color: THEME.text1,
+},
+
+runnerMetaFullRow: {
+  marginTop: 4,
+},
+
+// ✅ Pull meta left so it lines up with the left edge of the number inset
+// If it’s slightly off, adjust this number to match your runnerInsetLeft width + gap.
+runnerMetaFullRow: {
+  flexDirection: "row",
+  marginTop: 4,
+},
+
+// IMPORTANT: set this to match your number inset column width + the gap to runnerMain
+// Start with 54–60, tweak once if needed.
+runnerMetaLeftSpacer: {
+  width: 56,
+},
+
+runnerMetaContent: {
+  flex: 1,
+},
+
+runnerMetaStack: {
+  marginTop: 4,
+},
+
+runnerRowNew: {
+  flexDirection: "row",
+  alignItems: "flex-start",
+},
+
+runnerLeftStack: {
+  alignItems: "center",
+  gap: 8,
+},
+
+pickUnderNumberPill: {
+  width: 60,
+  paddingVertical: 6,
+  borderRadius: 12,
+  backgroundColor: "rgba(0,0,0,0.06)",
+  borderWidth: 1,
+  borderColor: "rgba(0,0,0,0.08)",
+  alignItems: "center",
+  justifyContent: "center",
+},
+
+pickUnderNumberText: {
+  fontSize: 12,
+  fontWeight: "800",
+  color: THEME.text1,
+},
+
+oddsTallBox: {
+  alignSelf: "stretch",
+  minWidth: 72,
+  borderRadius: 14,
+  backgroundColor: "rgba(0,0,0,0.06)",
+  borderWidth: 1,
+  borderColor: "rgba(0,0,0,0.08)",
+  alignItems: "center",
+  justifyContent: "center",
+  paddingHorizontal: 10,
+},
+
+runnerInsetLeftUnified: {
+  width: 60,
+  height: 36,
+  borderRadius: 12,
+  backgroundColor: "rgba(0,0,0,0.06)",
+  borderWidth: 1,
+  borderColor: "rgba(0,0,0,0.08)",
+  alignItems: "center",
+  justifyContent: "center",
 },
 
 });
