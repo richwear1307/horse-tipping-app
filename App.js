@@ -1928,11 +1928,10 @@ function HomeScreen({
   onGoLeaderboard,
   onGoResults,
 }) {
-
   const { width } = useWindowDimensions();
   const contentWidth = Math.min(width, 520) - 32; // maxWidth - paddingHorizontal*2
 
-    // ✅ Carousel: 2 slides (Last result, Next race)
+  // ✅ Carousel: 2 slides (Last result, Next race)
   const carouselRef = useRef(null);
   const [carouselIndex, setCarouselIndex] = useState(0);
 
@@ -2005,142 +2004,145 @@ function HomeScreen({
     return () => clearInterval(id);
   }, [contentWidth]);
 
-// ✅ CTA animation (slick press + subtle shine)
-const ctaScale = useRef(new Animated.Value(1)).current;
-const sheenX = useRef(new Animated.Value(-120)).current;
+  // ✅ CTA animation (slick press + subtle shine)
+  const ctaScale = useRef(new Animated.Value(1)).current;
+  const sheenX = useRef(new Animated.Value(-120)).current;
 
-useEffect(() => {
-  const loop = Animated.loop(
-    Animated.sequence([
-      Animated.timing(sheenX, {
-        toValue: 240,
-        duration: 1600,
-        useNativeDriver: false,
-      }),
-      Animated.timing(sheenX, {
-        toValue: -120,
-        duration: 0,
-        useNativeDriver: false,
-      }),
-      Animated.delay(1800),
-    ])
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(sheenX, {
+          toValue: 240,
+          duration: 1600,
+          useNativeDriver: false,
+        }),
+        Animated.timing(sheenX, {
+          toValue: -120,
+          duration: 0,
+          useNativeDriver: false,
+        }),
+        Animated.delay(1800),
+      ])
+    );
+
+    loop.start();
+    return () => loop.stop();
+  }, [sheenX]);
+
+  const onCtaPressIn = () => {
+    Animated.spring(ctaScale, {
+      toValue: 0.98,
+      useNativeDriver: true,
+      speed: 24,
+      bounciness: 6,
+    }).start();
+  };
+
+  const onCtaPressOut = () => {
+    Animated.spring(ctaScale, {
+      toValue: 1,
+      useNativeDriver: true,
+      speed: 24,
+      bounciness: 6,
+    }).start();
+  };
+
+  const AnimatedPressable = useMemo(
+    () => Animated.createAnimatedComponent(Pressable),
+    []
   );
-
-  loop.start();
-  return () => loop.stop();
-}, [sheenX]);
-
-const onCtaPressIn = () => {
-  Animated.spring(ctaScale, {
-    toValue: 0.98,
-    useNativeDriver: true,
-    speed: 24,
-    bounciness: 6,
-  }).start();
-};
-
-const onCtaPressOut = () => {
-  Animated.spring(ctaScale, {
-    toValue: 1,
-    useNativeDriver: true,
-    speed: 24,
-    bounciness: 6,
-  }).start();
-};
-
-const AnimatedPressable = useMemo(
-  () => Animated.createAnimatedComponent(Pressable),
-  []
-);
-
 
   return (
     <View style={styles.container}>
-<ScrollView
-  style={styles.content}
-  contentContainerStyle={{ paddingBottom: FOOTER_HEIGHT + 24 }}
-  showsVerticalScrollIndicator={false}
->
+      <ScrollView
+        style={styles.content}
+        contentContainerStyle={{ paddingBottom: FOOTER_HEIGHT + 24 }}
+        showsVerticalScrollIndicator={false}
+      >
         {/* PWA install prompt */}
-      <InstallBanner />
-      
-  {/* Hero banner */}
-  <View style={[styles.heroWrap, { renderToHardwareTextureAndroid: true }]}>
-        <ImageBackground
-          // TODO: replace this with your provided hero image (local require or remote uri)
-          source={HERO_IMAGE}
-          style={styles.heroBg}
-          imageStyle={styles.heroBgImage}
-          resizeMode="cover"
-        >
-          <View style={styles.heroOverlay}>
-            <View style={styles.heroCard}>
-              <View style={styles.heroBadge}>
-                <Text style={styles.heroBadgeIcon}>🏆</Text>
+        <InstallBanner />
+
+        {/* Hero banner */}
+        <View style={[styles.heroWrap, { renderToHardwareTextureAndroid: true }]}>
+          <ImageBackground
+            // TODO: replace this with your provided hero image (local require or remote uri)
+            source={HERO_IMAGE}
+            style={styles.heroBg}
+            imageStyle={styles.heroBgImage}
+            resizeMode="cover"
+          >
+            <View style={styles.heroOverlay}>
+              <View style={styles.heroCard}>
+                <View style={styles.heroBadge}>
+                  <Text style={styles.heroBadgeIcon}>🏆</Text>
+                </View>
+
+                <Text style={styles.heroKicker}>
+                  TOTAL PRIZE POT FOR THE COMPETITION
+                </Text>
+                <Text style={styles.heroHeadline}>£TBC DAILY</Text>
+                <Text style={styles.heroHeadline}>£TBC OVERALL</Text>
+                <Text style={styles.heroSub}>
+                  We will confirm total payouts once we have a confirm entry list.
+                </Text>
+
+                <AnimatedPressable
+                  onPress={onGoRaces}
+                  onPressIn={onCtaPressIn}
+                  onPressOut={onCtaPressOut}
+                  style={[
+                    styles.heroCta,
+                    {
+                      transform: [{ scale: ctaScale }],
+                    },
+                  ]}
+                >
+                  {/* sheen */}
+                  <Animated.View
+                    pointerEvents="none"
+                    style={[
+                      styles.heroCtaSheen,
+                      { transform: [{ translateX: sheenX }, { rotate: "20deg" }] },
+                    ]}
+                  />
+                  <Text style={styles.heroCtaText}>TIPS WILL OPEN SHORTLY</Text>
+                </AnimatedPressable>
               </View>
-
-              <Text style={styles.heroKicker}>TOTAL PRIZE POT FOR THE COMPETITION</Text>
-              <Text style={styles.heroHeadline}>£200</Text>
-              <Text style={styles.heroSub}>Tap below to enter your tips for today’s races.</Text>
-<AnimatedPressable
-  onPress={onGoRaces}
-  onPressIn={onCtaPressIn}
-  onPressOut={onCtaPressOut}
-  style={[
-    styles.heroCta,
-    {
-      transform: [{ scale: ctaScale }],
-    },
-  ]}
->
-  {/* sheen */}
-  <Animated.View
-    pointerEvents="none"
-    style={[
-      styles.heroCtaSheen,
-      { transform: [{ translateX: sheenX }, { rotate: "20deg" }] },
-    ]}
-  />
-  <Text style={styles.heroCtaText}>PICK MY HORSES FOR DAY 1</Text>
-</AnimatedPressable>
-
-</View>
-          </View>
-        </ImageBackground>
-      </View>
-
-          
-<View style={styles.statsRow}>
-          {/* LEFT: Today */}
-<View style={styles.statCard}>
-  <Text style={styles.statHeading}>Today’s ranking</Text>
-
-  <Text style={styles.statNumber}>
-    {todayRank ? `#${todayRank}` : "—"}
-  </Text>
-
-  <Text style={styles.statLabel}>
-    {formatGBP(todayWinnings)}
-    {todayRank ? ` • of ${todayTotalUsers}` : ""}
-  </Text>
-</View>
-
-          {/* RIGHT: Cumulative */}
-<View style={styles.statCard}>
-  <Text style={styles.statHeading}>Overall ranking</Text>
-
-  <Text style={styles.statNumber}>
-    {cumulativeRank ? `#${cumulativeRank}` : "—"}
-  </Text>
-
-  <Text style={styles.statLabel}>
-    {formatGBP(cumulativeWinnings)}
-    {cumulativeRank ? ` • of ${cumulativeTotalUsers}` : ""}
-  </Text>
-</View>
+            </View>
+          </ImageBackground>
         </View>
 
-                  {/* ✅ NEW: Carousel below the 2 total boxes */}
+        <View style={styles.statsRow}>
+          {/* LEFT: Today */}
+          <View style={styles.statCard}>
+            <Text style={styles.statHeading}>Today’s ranking</Text>
+
+            {/* ✅ NEW layout: "#2 • of 2" on one line */}
+            <Text style={styles.statNumber}>
+              {todayRank ? `#${todayRank}` : "—"}
+              {todayRank ? ` of ${todayTotalUsers}` : ""}
+            </Text>
+
+            {/* ✅ NEW layout: amount on its own line */}
+            <Text style={styles.statLabel}>{formatGBP(todayWinnings)}</Text>
+          </View>
+
+          {/* RIGHT: Cumulative */}
+          <View style={styles.statCard}>
+            <Text style={styles.statHeading}>Overall ranking</Text>
+
+            {/* ✅ NEW layout: "#1 • of 5" on one line */}
+            <Text style={styles.statNumber}>
+              {cumulativeRank ? `#${cumulativeRank}` : "—"}
+              {cumulativeRank ? ` of ${cumulativeTotalUsers}` : ""}
+            </Text>
+
+            {/* ✅ NEW layout: amount on its own line */}
+            <Text style={styles.statLabel}>{formatGBP(cumulativeWinnings)}</Text>
+          </View>
+        </View>
+
+        {/* ✅ NEW: Carousel below the 2 total boxes */}
         <View style={styles.carouselWrap}>
           <FlatList
             ref={carouselRef}
@@ -2189,13 +2191,24 @@ const AnimatedPressable = useMemo(
           />
 
           <View style={styles.carouselDots}>
-            <View style={[styles.carouselDot, carouselIndex === 0 && styles.carouselDotActive]} />
-            <View style={[styles.carouselDot, carouselIndex === 1 && styles.carouselDotActive]} />
+            <View
+              style={[
+                styles.carouselDot,
+                carouselIndex === 0 && styles.carouselDotActive,
+              ]}
+            />
+            <View
+              style={[
+                styles.carouselDot,
+                carouselIndex === 1 && styles.carouselDotActive,
+              ]}
+            />
           </View>
         </View>
+
         <StatusBar style="auto" />
-        </ScrollView>
-      </View>
+      </ScrollView>
+    </View>
   );
 }
 
@@ -2875,11 +2888,25 @@ const isSelected = tippedHorseId && runnerHorseId && tippedHorseId === runnerHor
   </Text>
 
   {(r.jockey || r.trainer) ? (
-    <Text style={styles.runnerMetaLineSingle} numberOfLines={1}>
-      {r.jockey ? `J ${r.jockey}` : ""}
-      {r.jockey && r.trainer ? "   " : ""}
-      {r.trainer ? `T ${r.trainer}` : ""}
-    </Text>
+    <View style={styles.runnerMetaRow}>
+      {r.jockey ? (
+        <View style={styles.metaGroup}>
+          <Text style={styles.metaBadge}>J</Text>
+          <Text style={styles.runnerMetaText} numberOfLines={1}>
+            {r.jockey}
+          </Text>
+        </View>
+      ) : null}
+
+      {r.trainer ? (
+        <View style={styles.metaGroup}>
+          <Text style={styles.metaBadge}>T</Text>
+          <Text style={styles.runnerMetaText} numberOfLines={1}>
+            {r.trainer}
+          </Text>
+        </View>
+      ) : null}
+    </View>
   ) : null}
 </View>
 
@@ -3205,14 +3232,28 @@ const myTipsForDay = useMemo(() => {
     {picked ? myTip.horseName : "No tip submitted for this race yet"}
   </Text>
 
-  {/* Jockey + Trainer (single small line underneath) */}
-  {(runner?.jockey || runner?.trainer) ? (
-    <Text style={styles.runnerMetaLineSingle} numberOfLines={1}>
-      {runner?.jockey ? `J ${runner.jockey}` : ""}
-      {runner?.jockey && runner?.trainer ? "   " : ""}
-      {runner?.trainer ? `T ${runner.trainer}` : ""}
-    </Text>
-  ) : null}
+{/* Jockey + Trainer */}
+{(runner?.jockey || runner?.trainer) ? (
+  <View style={styles.runnerMetaRow}>
+    {runner?.jockey ? (
+      <View style={styles.metaGroup}>
+        <Text style={styles.metaBadge}>J</Text>
+        <Text style={styles.runnerMetaText} numberOfLines={1}>
+          {runner.jockey}
+        </Text>
+      </View>
+    ) : null}
+
+    {runner?.trainer ? (
+      <View style={styles.metaGroup}>
+        <Text style={styles.metaBadge}>T</Text>
+        <Text style={styles.runnerMetaText} numberOfLines={1}>
+          {runner.trainer}
+        </Text>
+      </View>
+    ) : null}
+  </View>
+) : null}
 
   {/* ✅ Settlement-only notice: non-runner swap applied */}
   {picked && swapApplied ? (
@@ -3424,12 +3465,33 @@ function LeaderboardScreen({
           ...d.data(),
         }));
 
-        // ✅ Option A: only filter once usersLoaded (registeredSet null means “don’t filter”)
-        const filtered = registeredSet
-          ? list.filter((r) => registeredSet.has(r.userId))
-          : list;
+        // ✅ NEW: daily leaderboards should include EVERY registered user
+        // even if they have no doc yet for the day (0 tips / £0.00).
+        let merged = list;
 
-        const withNames = filtered.map((r) => ({
+        if (registeredSet) {
+          if (mode === "day") {
+            const byId = new Map(list.map((r) => [r.userId, r]));
+
+            // Add missing registered users with 0s
+            registeredSet.forEach((uid) => {
+              if (!byId.has(uid)) {
+                byId.set(uid, {
+                  userId: uid,
+                  totalReturnInclStake: 0,
+                  tips: 0,
+                });
+              }
+            });
+
+            merged = Array.from(byId.values());
+          } else {
+            // OVERALL: restrict to registered users
+            merged = list.filter((r) => registeredSet.has(r.userId));
+          }
+        }
+
+        const withNames = merged.map((r) => ({
           ...r,
           displayName:
             usersMap?.[r.userId]?.displayName ||
@@ -3438,6 +3500,15 @@ function LeaderboardScreen({
           gbp: Number(r.totalReturnInclStake ?? 0),
           tips: Number(r.tips ?? 0),
         }));
+
+        // ✅ Ensure consistent ordering after merging in zero rows
+        withNames.sort((a, b) => {
+          const diff = (b.gbp ?? 0) - (a.gbp ?? 0);
+          if (diff !== 0) return diff;
+          const tipsDiff = (b.tips ?? 0) - (a.tips ?? 0);
+          if (tipsDiff !== 0) return tipsDiff;
+          return String(a.displayName ?? "").localeCompare(String(b.displayName ?? ""));
+        });
 
         setRows(withNames);
         setLoading(false);
@@ -4707,7 +4778,7 @@ heroKicker: {
   marginBottom: 4,
 },
 heroHeadline: {
-  fontSize: 46,
+  fontSize: 36,
   fontWeight: "900",
   color: "#f59f00",
   textAlign: "center",
@@ -5518,6 +5589,68 @@ tipsPillText: {
 dayTabText: {
   textAlign: "center",
   lineHeight: 16,
+  flexShrink: 1,
+},
+
+rankCardContent: {
+  alignItems: "center",
+  justifyContent: "center",
+},
+
+rankCardTitle: {
+  fontSize: 13,
+  letterSpacing: 0.4,
+  color: THEME.text2,
+  marginBottom: 6,
+},
+
+rankCardPosition: {
+  fontSize: 22,
+  fontWeight: "700",
+  color: THEME.text1,
+},
+
+rankCardOf: {
+  fontSize: 16,
+  fontWeight: "500",
+  color: THEME.text2,
+},
+
+rankCardAmount: {
+  marginTop: 6,
+  fontSize: 15,
+  fontWeight: "600",
+  color: THEME.text2,
+},
+
+runnerMetaRow: {
+  flexDirection: "row",
+  alignItems: "center",
+  marginTop: 2,
+  gap: 12,
+},
+
+metaGroup: {
+  flexDirection: "row",
+  alignItems: "center",
+  gap: 6,
+  flexShrink: 1,
+},
+
+metaBadge: {
+  fontSize: 10,
+  fontWeight: "700",
+  paddingHorizontal: 6,
+  paddingVertical: 2,
+  borderRadius: 6,
+  backgroundColor: "rgba(0,0,0,0.06)",
+  color: THEME.text2,
+  overflow: "hidden",
+},
+
+runnerMetaText: {
+  fontSize: 12,
+  color: THEME.text2,
   flexShrink: 1,
 },
 
