@@ -17,6 +17,14 @@ import {
 } from "react-native";
 
 import {
+  signUpWithPin,
+  loginWithPin,
+  requestMagicLink
+} from "./services/authApi";
+
+import { getFunctions, httpsCallable } from "firebase/functions";
+
+import {
   House,
   Save,
   Lightbulb,
@@ -34,6 +42,9 @@ import {
   signInWithEmailAndPassword,
   onAuthStateChanged,
   signOut,
+  sendSignInLinkToEmail,
+  isSignInWithEmailLink,     // ✅ (finish handler)
+  signInWithEmailLink,       // ✅ (finish handler)
 } from "firebase/auth";
 
 import {
@@ -52,6 +63,8 @@ import {
   arrayRemove,
   serverTimestamp,
 } from "firebase/firestore";
+
+import InstallBanner from "./components/InstallBanner";
 
 // ---- GA4 helper (web only) ----
 function gaEvent(name, params = {}) {
@@ -482,9 +495,47 @@ if (!entry) {
 }
 
 export default function App() {
-  // ✅ Auth hooks ALWAYS run (never conditional)
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
+
+  // ✅ NEW: finish email-link sign-in on web when user clicks the magic link
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    if (typeof window === "undefined") return;
+
+    const href = window.location.href;
+
+    // Only run when the URL is an email sign-in link
+    if (!isSignInWithEmailLink(auth, href)) return;
+
+    (async () => {
+      try {
+        let email = window.localStorage.getItem("emailForSignIn");
+
+        // If they opened link on a different device/browser, ask for email
+        if (!email) {
+          email = window.prompt("Confirm your email to finish signing in:");
+        }
+
+        if (!email) {
+          showMessage("Email required", "Please enter your email to finish signing in.");
+          return;
+        }
+
+        await signInWithEmailLink(auth, email, href);
+        window.localStorage.removeItem("emailForSignIn");
+
+        // Optional: clean the URL (removes oobCode, apiKey, etc.)
+        window.history.replaceState({}, document.title, window.location.origin);
+      } catch (e) {
+        console.log("signInWithEmailLink failed:", e?.code, e?.message);
+        showMessage(
+          "Sign-in link failed",
+          "That link may have expired or already been used. Please request a new one."
+        );
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
@@ -506,9 +557,9 @@ export default function App() {
     return <AuthScreen />;
   }
 
-  // ✅ All game hooks live in GameApp (separate component)
   return <GameApp user={user} />;
 }
+
 
 function GameApp({ user }) {
   // ✅ Game hooks ALWAYS run within GameApp
@@ -1568,7 +1619,9 @@ function AdminEntrantsScreen({
         uid,
         displayName: displayName || "(No screen name)",
         sortKey: (displayName || "").toLowerCase(),
-        registered: activeCompetitionId ? registeredIds.includes(activeCompetitionId) : false,
+        registered: activeCompetitionId
+          ? registeredIds.includes(activeCompetitionId)
+          : false,
       };
     });
 
@@ -1584,19 +1637,54 @@ function AdminEntrantsScreen({
       const userRef = doc(firestoreDb, "users", uid);
 
       if (nextVal) {
-        // ✅ add competition id to array
+        // ✅ 1) add competition id to user profile
         await setDoc(
           userRef,
           { registeredCompetitionIds: arrayUnion(activeCompetitionId) },
           { merge: true }
         );
+
+        // ✅ 2) create/ensure overall leaderboard doc exists immediately
+        // competitions/{competitionId}/leaderboard/{uid}
+        const overallRef = doc(
+          firestoreDb,
+          "competitions",
+          activeCompetitionId,
+          "leaderboard",
+          uid
+        );
+
+        const displayNameLower = String(usersMap?.[uid]?.displayName ?? "")
+          .trim()
+          .toLowerCase();
+
+        await setDoc(
+          overallRef,
+          {
+            // required for leaderboard query + UI
+            totalReturnInclStake: 0,
+            tips: 0,
+
+            // tie-breaker fields (optional but recommended)
+            createdAt: serverTimestamp(),
+            displayNameLower,
+
+            // nice-to-have
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true } // don't clobber later aggregation writes
+        );
       } else {
-        // ✅ remove competition id from array
+        // ✅ remove competition id from user profile
         await setDoc(
           userRef,
           { registeredCompetitionIds: arrayRemove(activeCompetitionId) },
           { merge: true }
         );
+
+        // Note: we intentionally do NOT delete the leaderboard doc.
+        // Your LeaderboardScreen can continue filtering to registered users,
+        // which will hide unregistered users without losing historical data.
       }
     } catch (e) {
       showMessage("Save failed", e.message);
@@ -1605,13 +1693,18 @@ function AdminEntrantsScreen({
 
   return (
     <View style={styles.container}>
-      <ScrollView style={styles.content} contentContainerStyle={{ paddingBottom: 40 }}>
+      <ScrollView
+        style={styles.content}
+        contentContainerStyle={{ paddingBottom: 40 }}
+      >
         <Text style={styles.title}>Manage entrants</Text>
 
         <View style={[styles.card, { marginTop: 8 }]}>
           <Text style={styles.h2}>Active competition</Text>
           <Text style={styles.cardTitle}>
-            {activeCompetition?.name ? activeCompetition.name : "No active competition set"}
+            {activeCompetition?.name
+              ? activeCompetition.name
+              : "No active competition set"}
           </Text>
           <Text style={styles.cardHint}>
             Toggle an entrant on to register them for this competition.
@@ -1645,6 +1738,35 @@ function AuthScreen() {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
 
+  // ✅ NEW: send magic link
+const sendMagicLink = async () => {
+  if (!email) {
+    showMessage("Missing details", "Please enter your email address.");
+    return;
+  }
+
+  setBusy(true);
+  try {
+    // ✅ IMPORTANT: match your deployed region
+    const functions = getFunctions(undefined, "europe-west2");
+    const fn = httpsCallable(functions, "sendMagicLink");
+
+    await fn({ email: email.trim() });
+
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("emailForSignIn", email.trim());
+    }
+
+    showMessage("Check your email", "We’ve sent you a sign-in link.");
+  } catch (e) {
+    console.log("call sendMagicLink failed:", e);
+    showMessage("Error", `${e?.code || "no-code"}\n${e?.message || "no-message"}`);
+  } finally {
+    setBusy(false);
+  }
+};
+
+
   const register = async () => {
     if (!email || !password) {
       showMessage("Missing details", "Please enter an email and password.");
@@ -1671,11 +1793,16 @@ function AuthScreen() {
     setBusy(true);
     try {
       await signInWithEmailAndPassword(auth, email.trim(), password);
-    } catch (e) {
-      showMessage("Error", e.message);
-    } finally {
-      setBusy(false);
-    }
+} catch (e) {
+  console.log("sendMagicLink callable error:", e);
+  showMessage(
+    "Error sending link",
+    `${e?.code || "no-code"}\n${e?.message || "no-message"}`
+  );
+} finally {
+  setBusy(false);
+}
+
   };
 
   return (
@@ -1700,8 +1827,12 @@ function AuthScreen() {
                     <Text style={styles.heroBadgeIcon}>🔐</Text>
                   </View>
 
-                  <Text style={styles.authTitle}>Thornton Cricket Club Cheltenham Tipping Competition</Text>
-                  <Text style={styles.authSubtitle}>Enter an email and password to register or log in to play</Text>
+                  <Text style={styles.authTitle}>
+                    Thornton Cricket Club Cheltenham Tipping Competition
+                  </Text>
+                  <Text style={styles.authSubtitle}>
+                    Enter an email and password to register or log in to play
+                  </Text>
 
                   <View style={styles.authForm}>
                     <TextInput
@@ -1754,8 +1885,23 @@ function AuthScreen() {
                       </Text>
                     </Pressable>
 
+                    {/* ✅ NEW BUTTON: uses same layout + styling */}
+                    <Pressable
+                      style={[
+                        styles.button,
+                        styles.authSecondaryBtn,
+                        busy && styles.buttonDisabled,
+                      ]}
+                      onPress={sendMagicLink}
+                      disabled={busy}
+                    >
+                      <Text style={styles.buttonText}>
+                        {busy ? "Working…" : "Sign in using email link (no password)"}
+                      </Text>
+                    </Pressable>
+
                     <Text style={styles.authHint}>
-                      By continuing you agree to the group rules for the competition.
+                      Any identifiable data collected during this competition will be securely stored and used solely for the purpose of managing the tipping competition. We will not share your information with third parties, and it will be deleted after the competition concludes. By participating, you consent to this data usage policy.
                     </Text>
                   </View>
                 </View>
@@ -1788,11 +1934,10 @@ function HomeScreen({
   onGoLeaderboard,
   onGoResults,
 }) {
-
   const { width } = useWindowDimensions();
   const contentWidth = Math.min(width, 520) - 32; // maxWidth - paddingHorizontal*2
 
-    // ✅ Carousel: 2 slides (Last result, Next race)
+  // ✅ Carousel: 2 slides (Last result, Next race)
   const carouselRef = useRef(null);
   const [carouselIndex, setCarouselIndex] = useState(0);
 
@@ -1865,139 +2010,145 @@ function HomeScreen({
     return () => clearInterval(id);
   }, [contentWidth]);
 
-// ✅ CTA animation (slick press + subtle shine)
-const ctaScale = useRef(new Animated.Value(1)).current;
-const sheenX = useRef(new Animated.Value(-120)).current;
+  // ✅ CTA animation (slick press + subtle shine)
+  const ctaScale = useRef(new Animated.Value(1)).current;
+  const sheenX = useRef(new Animated.Value(-120)).current;
 
-useEffect(() => {
-  const loop = Animated.loop(
-    Animated.sequence([
-      Animated.timing(sheenX, {
-        toValue: 240,
-        duration: 1600,
-        useNativeDriver: false,
-      }),
-      Animated.timing(sheenX, {
-        toValue: -120,
-        duration: 0,
-        useNativeDriver: false,
-      }),
-      Animated.delay(1800),
-    ])
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(sheenX, {
+          toValue: 240,
+          duration: 1600,
+          useNativeDriver: false,
+        }),
+        Animated.timing(sheenX, {
+          toValue: -120,
+          duration: 0,
+          useNativeDriver: false,
+        }),
+        Animated.delay(1800),
+      ])
+    );
+
+    loop.start();
+    return () => loop.stop();
+  }, [sheenX]);
+
+  const onCtaPressIn = () => {
+    Animated.spring(ctaScale, {
+      toValue: 0.98,
+      useNativeDriver: true,
+      speed: 24,
+      bounciness: 6,
+    }).start();
+  };
+
+  const onCtaPressOut = () => {
+    Animated.spring(ctaScale, {
+      toValue: 1,
+      useNativeDriver: true,
+      speed: 24,
+      bounciness: 6,
+    }).start();
+  };
+
+  const AnimatedPressable = useMemo(
+    () => Animated.createAnimatedComponent(Pressable),
+    []
   );
-
-  loop.start();
-  return () => loop.stop();
-}, [sheenX]);
-
-const onCtaPressIn = () => {
-  Animated.spring(ctaScale, {
-    toValue: 0.98,
-    useNativeDriver: true,
-    speed: 24,
-    bounciness: 6,
-  }).start();
-};
-
-const onCtaPressOut = () => {
-  Animated.spring(ctaScale, {
-    toValue: 1,
-    useNativeDriver: true,
-    speed: 24,
-    bounciness: 6,
-  }).start();
-};
-
-const AnimatedPressable = useMemo(
-  () => Animated.createAnimatedComponent(Pressable),
-  []
-);
-
 
   return (
     <View style={styles.container}>
-<ScrollView
-  style={styles.content}
-  contentContainerStyle={{ paddingBottom: FOOTER_HEIGHT + 24 }}
-  showsVerticalScrollIndicator={false}
->
-  {/* Hero banner */}
-  <View style={[styles.heroWrap, { renderToHardwareTextureAndroid: true }]}>
-        <ImageBackground
-          // TODO: replace this with your provided hero image (local require or remote uri)
-          source={HERO_IMAGE}
-          style={styles.heroBg}
-          imageStyle={styles.heroBgImage}
-          resizeMode="cover"
-        >
-          <View style={styles.heroOverlay}>
-            <View style={styles.heroCard}>
-              <View style={styles.heroBadge}>
-                <Text style={styles.heroBadgeIcon}>🏆</Text>
+      <ScrollView
+        style={styles.content}
+        contentContainerStyle={{ paddingBottom: FOOTER_HEIGHT + 24 }}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* PWA install prompt */}
+        <InstallBanner />
+
+        {/* Hero banner */}
+        <View style={[styles.heroWrap, { renderToHardwareTextureAndroid: true }]}>
+          <ImageBackground
+            // TODO: replace this with your provided hero image (local require or remote uri)
+            source={HERO_IMAGE}
+            style={styles.heroBg}
+            imageStyle={styles.heroBgImage}
+            resizeMode="cover"
+          >
+            <View style={styles.heroOverlay}>
+              <View style={styles.heroCard}>
+                <View style={styles.heroBadge}>
+                  <Text style={styles.heroBadgeIcon}>🏆</Text>
+                </View>
+
+                <Text style={styles.heroKicker}>
+                  TOTAL PRIZE POT FOR THE COMPETITION
+                </Text>
+                <Text style={styles.heroHeadline}>£TBC DAILY</Text>
+                <Text style={styles.heroHeadline}>£TBC OVERALL</Text>
+                <Text style={styles.heroSub}>
+                  We will confirm total payouts once we have a confirm entry list.
+                </Text>
+
+                <AnimatedPressable
+                  onPress={onGoRaces}
+                  onPressIn={onCtaPressIn}
+                  onPressOut={onCtaPressOut}
+                  style={[
+                    styles.heroCta,
+                    {
+                      transform: [{ scale: ctaScale }],
+                    },
+                  ]}
+                >
+                  {/* sheen */}
+                  <Animated.View
+                    pointerEvents="none"
+                    style={[
+                      styles.heroCtaSheen,
+                      { transform: [{ translateX: sheenX }, { rotate: "20deg" }] },
+                    ]}
+                  />
+                  <Text style={styles.heroCtaText}>TIPS WILL OPEN SHORTLY</Text>
+                </AnimatedPressable>
               </View>
-
-              <Text style={styles.heroKicker}>TOTAL PRIZE POT FOR THE COMPETITION</Text>
-              <Text style={styles.heroHeadline}>£200</Text>
-              <Text style={styles.heroSub}>Tap below to enter your tips for today’s races.</Text>
-<AnimatedPressable
-  onPress={onGoRaces}
-  onPressIn={onCtaPressIn}
-  onPressOut={onCtaPressOut}
-  style={[
-    styles.heroCta,
-    {
-      transform: [{ scale: ctaScale }],
-    },
-  ]}
->
-  {/* sheen */}
-  <Animated.View
-    pointerEvents="none"
-    style={[
-      styles.heroCtaSheen,
-      { transform: [{ translateX: sheenX }, { rotate: "20deg" }] },
-    ]}
-  />
-  <Text style={styles.heroCtaText}>PICK MY HORSES FOR DAY 1</Text>
-</AnimatedPressable>
-
-</View>
-          </View>
-        </ImageBackground>
-      </View>
-
-          
-<View style={styles.statsRow}>
-          {/* LEFT: Today */}
-<View style={styles.statCard}>
-  <Text style={styles.statHeading}>Today’s ranking</Text>
-
-  <Text style={styles.statNumber}>
-    {todayRank ? `#${todayRank}` : "—"}
-  </Text>
-
-  <Text style={styles.statLabel}>
-    {formatGBP(todayWinnings)}
-    {todayRank ? ` • of ${todayTotalUsers}` : ""}
-  </Text>
-</View>
-
-          {/* RIGHT: Cumulative */}
-<View style={styles.statCard}>
-  <Text style={styles.statHeading}>Overall ranking</Text>
-
-  <Text style={styles.statNumber}>
-    {cumulativeRank ? `#${cumulativeRank}` : "—"}
-  </Text>
-
-  <Text style={styles.statLabel}>
-    {formatGBP(cumulativeWinnings)}
-    {cumulativeRank ? ` • of ${cumulativeTotalUsers}` : ""}
-  </Text>
-</View>
+            </View>
+          </ImageBackground>
         </View>
 
-                  {/* ✅ NEW: Carousel below the 2 total boxes */}
+        <View style={styles.statsRow}>
+          {/* LEFT: Today */}
+          <View style={styles.statCard}>
+            <Text style={styles.statHeading}>Today’s ranking</Text>
+
+            {/* ✅ NEW layout: "#2 • of 2" on one line */}
+            <Text style={styles.statNumber}>
+              {todayRank ? `#${todayRank}` : "—"}
+              {todayRank ? ` of ${todayTotalUsers}` : ""}
+            </Text>
+
+            {/* ✅ NEW layout: amount on its own line */}
+            <Text style={styles.statLabel}>{formatGBP(todayWinnings)}</Text>
+          </View>
+
+          {/* RIGHT: Cumulative */}
+          <View style={styles.statCard}>
+            <Text style={styles.statHeading}>Overall ranking</Text>
+
+            {/* ✅ NEW layout: "#1 • of 5" on one line */}
+            <Text style={styles.statNumber}>
+              {cumulativeRank ? `#${cumulativeRank}` : "—"}
+              {cumulativeRank ? ` of ${cumulativeTotalUsers}` : ""}
+            </Text>
+
+            {/* ✅ NEW layout: amount on its own line */}
+            <Text style={styles.statLabel}>{formatGBP(cumulativeWinnings)}</Text>
+          </View>
+        </View>
+
+        {/* ✅ NEW: Carousel below the 2 total boxes */}
         <View style={styles.carouselWrap}>
           <FlatList
             ref={carouselRef}
@@ -2046,13 +2197,24 @@ const AnimatedPressable = useMemo(
           />
 
           <View style={styles.carouselDots}>
-            <View style={[styles.carouselDot, carouselIndex === 0 && styles.carouselDotActive]} />
-            <View style={[styles.carouselDot, carouselIndex === 1 && styles.carouselDotActive]} />
+            <View
+              style={[
+                styles.carouselDot,
+                carouselIndex === 0 && styles.carouselDotActive,
+              ]}
+            />
+            <View
+              style={[
+                styles.carouselDot,
+                carouselIndex === 1 && styles.carouselDotActive,
+              ]}
+            />
           </View>
         </View>
+
         <StatusBar style="auto" />
-        </ScrollView>
-      </View>
+      </ScrollView>
+    </View>
   );
 }
 
@@ -2210,6 +2372,7 @@ const toggleRace = (raceId) => {
                   </Pressable>
 
                   {/* EXPANDED CONTENT */}
+{/* EXPANDED CONTENT */}
 {isOpen && (
   <View style={{ marginTop: 10 }}>
     {!res ? (
@@ -2231,15 +2394,19 @@ const toggleRace = (raceId) => {
           return <Text style={styles.cardHint}>Result: pending</Text>;
         }
 
+        // Count tips for a specific horse in this race
+        const countTipsForHorse = (raceId, horseName) => {
+          if (!horseName) return 0;
+          const list = allTips ?? [];
+          return list.filter((t) => t?.raceId === raceId && t?.horseName === horseName).length;
+        };
+
+        const tipLabel = (n) => `${n} ${n === 1 ? "tip" : "tips"}`;
+
         return (
           <>
-            {/* Winner tips count (winner only) */}
-            <Text style={styles.cardHint}>
-              Winning tips: {countWinningTips(r.id, getWinnerHorse(res))}
-            </Text>
-
-            {/* Show ALL placed horses including winner */}
-            <View style={{ marginTop: 8, gap: 4 }}>
+            {/* Show ALL placed horses including winner, with tip counts on each row */}
+            <View style={{ marginTop: 8, gap: 6 }}>
               {sortedPlacements.map((p) => {
                 const pos = Number(p.position);
                 const posLabel =
@@ -2251,10 +2418,21 @@ const toggleRace = (raceId) => {
                 const odds =
                   p.oddsDisplay || (p.oddsDecimal ? String(p.oddsDecimal) : "—");
 
+                const tips = countTipsForHorse(r.id, p.horseName);
+
                 return (
-                  <Text key={`${r.id}_${pos}_${p.horseName}`} style={styles.cardHint}>
-                    {posLabel}: {p.horseName} {odds !== "—" ? `(${odds})` : ""}
-                  </Text>
+                  <View
+                    key={`${r.id}_${pos}_${p.horseName}`}
+                    style={styles.placementRow}
+                  >
+                    <Text style={[styles.cardHint, styles.placementText]}>
+                      {posLabel}: {p.horseName} {odds !== "—" ? `(${odds})` : ""}
+                    </Text>
+
+                    <View style={styles.tipsPill}>
+                      <Text style={styles.tipsPillText}>{tipLabel(tips)}</Text>
+                    </View>
+                  </View>
                 );
               })}
             </View>
@@ -2279,6 +2457,7 @@ const toggleRace = (raceId) => {
 function ProfileScreen({ user, onBack }) {
   const [loading, setLoading] = useState(true);
   const [displayName, setDisplayName] = useState("");
+  const [email, setEmail] = useState(""); // ✅ NEW
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -2289,6 +2468,8 @@ function ProfileScreen({ user, onBack }) {
       (snap) => {
         const data = snap.exists() ? snap.data() : null;
         setDisplayName(data?.displayName ?? "");
+        // ✅ NEW: prefer Firestore email, fallback to auth user email
+        setEmail(data?.email ?? user.email ?? "");
         setLoading(false);
       },
       (err) => {
@@ -2298,7 +2479,7 @@ function ProfileScreen({ user, onBack }) {
     );
 
     return unsub;
-  }, [user.uid]);
+  }, [user.uid, user.email]);
 
   const save = async () => {
     if (!displayName) {
@@ -2328,7 +2509,7 @@ function ProfileScreen({ user, onBack }) {
         doc(firestoreDb, "users", user.uid),
         {
           displayName: displayName, // EXACTLY as typed
-          email: user.email ?? "",
+          email: user.email ?? email ?? "", // ✅ NEW: saved alongside name
           updatedAt: serverTimestamp(),
         },
         { merge: true }
@@ -2345,42 +2526,71 @@ function ProfileScreen({ user, onBack }) {
   return (
     <View style={styles.container}>
       <View style={styles.content}>
-      <Text style={styles.title}>Profile</Text>
+        <Text style={styles.title}>Profile</Text>
 
-      {loading ? (
-        <Text style={styles.subtitle}>Loading profile…</Text>
-      ) : (
-        <>
-          <Text style={styles.subtitle}>Display name (shown on leaderboard)</Text>
+        {loading ? (
+          <Text style={styles.subtitle}>Loading profile…</Text>
+        ) : (
+          <>
+            <Text style={styles.subtitle}>Display name (shown on leaderboard)</Text>
 
-          <TextInput
-            value={displayName}
-            placeholderTextColor={THEME.text3}
-            onChangeText={setDisplayName}
-            placeholder="Enter display name"
-            style={styles.input}
-          />
+            <TextInput
+              value={displayName}
+              placeholderTextColor={THEME.text3}
+              onChangeText={setDisplayName}
+              placeholder="Enter display name"
+              style={styles.input}
+            />
 
-          <Pressable
-            style={[styles.button, styles.buttonPrimary, saving ? styles.buttonDisabled : null]}
-            onPress={save}
-            disabled={saving}
-          >
-            <Text style={styles.buttonText}>{saving ? "Saving…" : "Save"}</Text>
-          </Pressable>
-        </>
-      )}
+            {/* ✅ NEW: Email field */}
+            <Text style={[styles.subtitle, { marginTop: 14 }]}>Email address</Text>
 
-      <StatusBar style="auto" />
+            <TextInput
+              value={email}
+              placeholderTextColor={THEME.text3}
+              editable={false}
+              selectTextOnFocus={false}
+              style={[styles.input, { opacity: 0.7 }]}
+            />
+
+            <Pressable
+              style={[
+                styles.button,
+                styles.buttonPrimary,
+                saving ? styles.buttonDisabled : null,
+              ]}
+              onPress={save}
+              disabled={saving}
+            >
+              <Text style={styles.buttonText}>{saving ? "Saving…" : "Save"}</Text>
+            </Pressable>
+          </>
+        )}
+
+        <StatusBar style="auto" />
+      </View>
     </View>
-  </View>
   );
 }
+
+// ✅ NOTE: Make sure you have this import at the top of the file:
+// import { Animated } from "react-native";
 
 function RacesScreen({ races, racesLoading, activeDay, tips, onBack, onPickTip, allTips }) {
   const [now, setNow] = useState(Date.now());
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [horseSort, setHorseSort] = useState("odds"); // "odds" | "number"
+
+  // ✅ Transition anim for switching races (auto-advance + manual tab)
+  const raceTransition = useRef(new Animated.Value(1)).current;
+  const playRaceTransition = () => {
+    raceTransition.setValue(0);
+    Animated.timing(raceTransition, {
+      toValue: 1,
+      duration: 220,
+      useNativeDriver: true,
+    }).start();
+  };
 
   // Update once per minute
   useEffect(() => {
@@ -2388,46 +2598,52 @@ function RacesScreen({ races, racesLoading, activeDay, tips, onBack, onPickTip, 
     return () => clearInterval(id);
   }, []);
 
-  // Keep index valid
+  const visibleRaces = useMemo(() => {
+    if (!activeDay) return [];
+    return races.filter((r) => r.date === activeDay);
+  }, [races, activeDay]);
 
-    const visibleRaces = useMemo(() => {
-  if (!activeDay) return [];
-  return races.filter(r => r.date === activeDay);
-}, [races, activeDay]);
+  // Keep index valid
   useEffect(() => {
-if (selectedIndex > visibleRaces.length - 1) {
-  setSelectedIndex(0);
-}
-}, [visibleRaces.length, selectedIndex]);
+    if (selectedIndex > visibleRaces.length - 1) {
+      setSelectedIndex(0);
+    }
+  }, [visibleRaces.length, selectedIndex]);
 
   const selectedRace = visibleRaces[selectedIndex] ?? null;
 
+  // ✅ Play transition whenever we change selected race
+  useEffect(() => {
+    if (!selectedRace) return;
+    playRaceTransition();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedIndex]);
+
   const hotTip = useMemo(() => {
-  if (!selectedRace?.id) return null;
+    if (!selectedRace?.id) return null;
 
-  const raceTips = (allTips ?? []).filter((t) => t?.raceId === selectedRace.id);
-  if (raceTips.length === 0) return null;
+    const raceTips = (allTips ?? []).filter((t) => t?.raceId === selectedRace.id);
+    if (raceTips.length === 0) return null;
 
-  const counts = new Map();
-
-  for (const t of raceTips) {
-    const name = String(t?.horseName ?? "").trim();
-    if (!name) continue;
-    counts.set(name, (counts.get(name) ?? 0) + 1);
-  }
-
-  let bestHorse = null;
-  let bestCount = 0;
-
-  for (const [horseName, tipCount] of counts.entries()) {
-    if (tipCount > bestCount) {
-      bestHorse = horseName;
-      bestCount = tipCount;
+    const counts = new Map();
+    for (const t of raceTips) {
+      const name = String(t?.horseName ?? "").trim();
+      if (!name) continue;
+      counts.set(name, (counts.get(name) ?? 0) + 1);
     }
-  }
 
-  return bestHorse ? { horseName: bestHorse, tipCount: bestCount } : null;
-}, [allTips, selectedRace?.id]);
+    let bestHorse = null;
+    let bestCount = 0;
+
+    for (const [horseName, tipCount] of counts.entries()) {
+      if (tipCount > bestCount) {
+        bestHorse = horseName;
+        bestCount = tipCount;
+      }
+    }
+
+    return bestHorse ? { horseName: bestHorse, tipCount: bestCount } : null;
+  }, [allTips, selectedRace?.id]);
 
   // Current user's saved tip(s) for this day (one per raceId)
   const tipByRaceId = useMemo(() => {
@@ -2438,153 +2654,164 @@ if (selectedIndex > visibleRaces.length - 1) {
     return map;
   }, [tips]);
 
-const findNextUntippedIndex = (fromIndex, justTippedRaceId) => {
-  if (!visibleRaces.length) return null;
+  const findNextUntippedIndex = (fromIndex, justTippedRaceId) => {
+    if (!visibleRaces.length) return null;
 
-  for (let i = fromIndex + 1; i < visibleRaces.length; i++) {
-    const rid = visibleRaces[i]?.id;
-    const alreadyTipped = rid === justTippedRaceId || !!tipByRaceId[rid];
-    if (!alreadyTipped) return i;
-  }
+    for (let i = fromIndex + 1; i < visibleRaces.length; i++) {
+      const rid = visibleRaces[i]?.id;
+      const alreadyTipped = rid === justTippedRaceId || !!tipByRaceId[rid];
+      if (!alreadyTipped) return i;
+    }
 
-  for (let i = 0; i < fromIndex; i++) {
-    const rid = visibleRaces[i]?.id;
-    const alreadyTipped = rid === justTippedRaceId || !!tipByRaceId[rid];
-    if (!alreadyTipped) return i;
-  }
+    for (let i = 0; i < fromIndex; i++) {
+      const rid = visibleRaces[i]?.id;
+      const alreadyTipped = rid === justTippedRaceId || !!tipByRaceId[rid];
+      if (!alreadyTipped) return i;
+    }
 
-  return null; // everything is tipped
-};
+    return null; // everything is tipped
+  };
 
-const handlePickTip = async (raceId, horseName, wasSelected) => {
-  await onPickTip(raceId, horseName, wasSelected);
+  const handlePickTip = async (raceId, horseName, wasSelected) => {
+    await onPickTip(raceId, horseName, wasSelected);
 
-  if (!wasSelected) {
-    const next = findNextUntippedIndex(selectedIndex, raceId);
-    if (next !== null) setSelectedIndex(next);
-  }
-};
+    if (!wasSelected) {
+      const next = findNextUntippedIndex(selectedIndex, raceId);
+      if (next !== null) setSelectedIndex(next);
+    }
+  };
 
   const currentTipHorse =
     (selectedRace?.id && tipByRaceId[selectedRace.id]?.horseName) || null;
 
+  if (racesLoading) {
+    return (
+      <View style={styles.container}>
+        <ScrollView
+          style={styles.content}
+          contentContainerStyle={{ flexGrow: 1 }}
+          showsVerticalScrollIndicator={false}
+        >
+          <Text style={styles.title}>Upcoming Races</Text>
+          <Text style={styles.subtitle}>Loading races…</Text>
+        </ScrollView>
+      </View>
+    );
+  }
 
-if (racesLoading) {
+  if (!selectedRace) {
+    return (
+      <View style={styles.container}>
+        <ScrollView
+          style={styles.content}
+          contentContainerStyle={{ flexGrow: 1 }}
+          showsVerticalScrollIndicator={false}
+        >
+          <Text style={styles.title}>Upcoming Races</Text>
+          <Text style={styles.subtitle}>No races available.</Text>
+        </ScrollView>
+      </View>
+    );
+  }
+
+  const lockAt = selectedRace.lockAt ?? 0;
+  const remaining = lockAt ? lockAt - now : null;
+  const locked = remaining !== null && remaining <= 0;
+  const countdownText =
+    remaining === null ? "No lock time" : formatCountdownHM(remaining);
+
   return (
     <View style={styles.container}>
       <ScrollView
         style={styles.content}
-        contentContainerStyle={{ flexGrow: 1 }}
+        contentContainerStyle={{ paddingBottom: FOOTER_HEIGHT + 24 }}
         showsVerticalScrollIndicator={false}
+        stickyHeaderIndices={[1]} // 👈 the sticky child index (see below)
       >
-        <Text style={styles.title}>Upcoming Races</Text>
-        <Text style={styles.subtitle}>Loading races…</Text>
-      </ScrollView>
-    </View>
-  );
-}
+        <Text style={styles.title}>Enter my tips</Text>
 
-if (!selectedRace) {
-  return (
-    <View style={styles.container}>
-      <ScrollView
-        style={styles.content}
-        contentContainerStyle={{ flexGrow: 1 }}
-        showsVerticalScrollIndicator={false}
-      >
-        <Text style={styles.title}>Upcoming Races</Text>
-        <Text style={styles.subtitle}>No races available.</Text>
-      </ScrollView>
-    </View>
-  );
-}
+        {/* Sticky wrapper (direct child index 1) */}
+        <View style={styles.stickyRaceSelectorWrap}>
+          {/* 1–7 race selector */}
+          <View style={styles.raceSelectorRow}>
+            {visibleRaces.slice(0, 7).map((race, idx) => {
+              const active = idx === selectedIndex;
+              const hasTip = !!tipByRaceId[race.id];
+              return (
+                <Pressable
+                  key={race.id}
+                  onPress={() => setSelectedIndex(idx)}
+                  style={[
+                    styles.raceSelectorBtn,
+                    active && styles.raceSelectorBtnActive,
+                    hasTip && styles.raceSelectorBtnTipped,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.raceSelectorText,
+                      active && styles.raceSelectorTextActive,
+                      hasTip && styles.raceSelectorTextTipped,
+                    ]}
+                  >
+                    {idx + 1}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
 
-const lockAt = selectedRace.lockAt ?? 0;
-const remaining = lockAt ? lockAt - now : null;
-const locked = remaining !== null && remaining <= 0;
-const countdownText =
-  remaining === null ? "No lock time" : formatCountdownHM(remaining);
+        {/* ✅ Selected race card with transition */}
+        <Animated.View
+          style={[
+            styles.card,
+            {
+              opacity: raceTransition,
+              transform: [
+                {
+                  translateX: raceTransition.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [14, 0],
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
+          <>
+            {/* Header: title + date */}
+            <View style={styles.raceHeaderTopRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.cardTitle}>
+                  {(selectedRace.offTime ?? formatTimeUK(selectedRace.lockAt))}{" "}
+                  {selectedRace.name}
+                </Text>
+                <Text style={styles.cardSubtitle}>
+                  {formatDateShortUK(selectedRace.date)}
+                </Text>
+              </View>
+            </View>
 
-return (
-  <View style={styles.container}>
-<ScrollView
-  style={styles.content}
-  contentContainerStyle={{ paddingBottom: FOOTER_HEIGHT + 24 }}
-  showsVerticalScrollIndicator={false}
-  stickyHeaderIndices={[1]}   // 👈 the sticky child index (see below)
->
-  <Text style={styles.title}>Enter my tips</Text>
+            {/* Most tipped pill on its own row (under date, above tips close) */}
+            {hotTip?.horseName ? (
+              <View style={styles.mostTippedInlineUnder}>
+                <Flame size={18} color={THEME.primary} strokeWidth={2.5} />
+                <Text style={styles.mostTippedInlineText} numberOfLines={1}>
+                  Most tipped:{" "}
+                  <Text style={styles.mostTippedInlineHorse}>
+                    {hotTip.horseName}
+                  </Text>{" "}
+                  · {hotTip.tipCount} tip{hotTip.tipCount === 1 ? "" : "s"}
+                </Text>
+              </View>
+            ) : null}
 
-  {/* Sticky wrapper (direct child index 1) */}
-  <View style={styles.stickyRaceSelectorWrap}>
-    {/* 1–7 race selector */}
-    <View style={styles.raceSelectorRow}>
-      {visibleRaces.slice(0, 7).map((race, idx) => {
-        const active = idx === selectedIndex;
-        const hasTip = !!tipByRaceId[race.id];
-        return (
-          <Pressable
-            key={race.id}
-            onPress={() => setSelectedIndex(idx)}
-            style={[
-              styles.raceSelectorBtn,
-              active && styles.raceSelectorBtnActive,
-              hasTip && styles.raceSelectorBtnTipped,
-            ]}
-          >
-            <Text
-              style={[
-                styles.raceSelectorText,
-                active && styles.raceSelectorTextActive,
-                hasTip && styles.raceSelectorTextTipped,
-              ]}
-            >
-              {idx + 1}
+            <Text style={styles.cardHint}>
+              {locked ? "Tips closed" : "Tips close in"}: {countdownText}
             </Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  </View>
 
-      {/* Selected race card */}
-      <View style={styles.card}>
-        <>
-{/* Header + Hot tips row */}
-<View style={styles.headerWithHotTips}>
-  {/* Left: race title + date */}
-  <View style={{ flex: 1 }}>
-    <Text style={styles.cardTitle}>
-      {(selectedRace.offTime ?? formatTimeUK(selectedRace.lockAt))}{" "}
-      {selectedRace.name}
-    </Text>
-    <Text style={styles.cardSubtitle}>
-  {formatDateShortUK(selectedRace.date)}
-</Text>
-  </View>
-
-  {/* Right: Hot tips square */}
-  <View style={styles.hotTipsSquare}>
-    <Flame size={22} color={THEME.primary} strokeWidth={2.5} />
-    <Text style={styles.hotTipsTitle}>Most tipped</Text>
-
-    <Text style={styles.hotTipsHorse} numberOfLines={1}>
-      {hotTip?.horseName ?? "—"}
-    </Text>
-
-    {hotTip?.tipCount ? (
-      <Text style={styles.hotTipsMeta}>
-        {hotTip.tipCount} tip{hotTip.tipCount === 1 ? "" : "s"}
-      </Text>
-    ) : null}
-  </View>
-</View>
-
-          <Text style={styles.cardHint}>
-            {locked ? "Tips closed" : "Tips close in"}: {countdownText}
-          </Text>
-
-                      <>
+            <>
               {/* Sort toggles */}
               <View style={styles.sortRow}>
                 <Pressable
@@ -2636,25 +2863,25 @@ return (
                           oddsDecimal: 0,
                         }));
 
-const withSortKeys = raw.map((r) => {
-  const od =
-    Number(r.oddsDecimal) > 0
-      ? Number(r.oddsDecimal)
-      : fractionalToDecimal(r.oddsDisplay) ?? 9999;
+                  const withSortKeys = raw.map((r) => {
+                    const od =
+                      Number(r.oddsDecimal) > 0
+                        ? Number(r.oddsDecimal)
+                        : fractionalToDecimal(r.oddsDisplay) ?? 9999;
 
-  return {
-    ...r,
-    number: Number(r.number) || 0,
-    horseName: String(r.horseName ?? "").trim(),
-    oddsDisplay: String(r.oddsDisplay ?? "").trim(),
+                    return {
+                      ...r,
+                      number: Number(r.number) || 0,
+                      horseName: String(r.horseName ?? "").trim(),
+                      oddsDisplay: String(r.oddsDisplay ?? "").trim(),
 
-    // ✅ Ensure jockey/trainer exist on the object used by the UI
-    jockey: String(r.jockey ?? r.jockeyName ?? "").trim(),
-    trainer: String(r.trainer ?? r.trainerName ?? "").trim(),
+                      // Ensure jockey/trainer exist on the object used by the UI
+                      jockey: String(r.jockey ?? r.jockeyName ?? "").trim(),
+                      trainer: String(r.trainer ?? r.trainerName ?? "").trim(),
 
-    _oddsKey: od,
-  };
-});
+                      _oddsKey: od,
+                    };
+                  });
 
                   const sorted = withSortKeys
                     .filter((r) => r.horseName)
@@ -2669,9 +2896,14 @@ const withSortKeys = raw.map((r) => {
                       r.oddsDisplay ||
                       (r._oddsKey !== 9999 ? String(r._oddsKey) : "—");
 
-                    const tippedHorseId = String(tipByRaceId?.[selectedRace.id]?.horseId ?? "").trim();
-const runnerHorseId = String(r.horseId ?? "").trim();
-const isSelected = tippedHorseId && runnerHorseId && tippedHorseId === runnerHorseId;
+                    const tippedHorseId = String(
+                      tipByRaceId?.[selectedRace.id]?.horseId ?? ""
+                    ).trim();
+                    const runnerHorseId = String(r.horseId ?? "").trim();
+                    const isSelected =
+                      tippedHorseId &&
+                      runnerHorseId &&
+                      tippedHorseId === runnerHorseId;
 
                     return (
                       <Pressable
@@ -2683,34 +2915,59 @@ const isSelected = tippedHorseId && runnerHorseId && tippedHorseId === runnerHor
                           isSelected && styles.runnerCardSelected,
                         ]}
                         disabled={locked}
-                        onPress={() => handlePickTip(selectedRace.id, r.horseName, isSelected)}
+                        onPress={() =>
+                          handlePickTip(selectedRace.id, r.horseName, isSelected)
+                        }
                       >
-                        <View style={styles.runnerRow}>
-                          <View style={styles.runnerInsetLeft}>
-                            <Text style={styles.runnerInsetText}>
-                              {r.number || "—"}
-                            </Text>
+                        {/* ✅ UPDATED RUNNER LAYOUT (PICK under number, tall odds on right) */}
+                        <View style={styles.runnerRowNew}>
+                          {/* LEFT STACK: number + PICK */}
+                          <View style={styles.runnerLeftStack}>
+                            <View style={styles.runnerInsetLeftUnified}>
+                              <Text style={styles.runnerInsetText}>
+                                {r.number || "—"}
+                              </Text>
+                            </View>
+
+                            <View style={styles.pickUnderNumberPill}>
+                              <Text style={styles.pickUnderNumberText}>
+                                {isSelected ? "PICKED" : "PICK"}
+                              </Text>
+                            </View>
                           </View>
 
-<View style={styles.runnerCenter}>
-  <Text style={styles.runnerName} numberOfLines={1}>
-    {r.horseName}
-  </Text>
+                          {/* CENTER: name + meta */}
+                          <View style={styles.runnerMain}>
+                            <Text style={styles.runnerName} numberOfLines={1}>
+                              {r.horseName}
+                            </Text>
 
-  {(r.jockey || r.trainer) ? (
-    <Text style={styles.runnerMetaLineSingle} numberOfLines={1}>
-      {r.jockey ? `J ${r.jockey}` : ""}
-      {r.jockey && r.trainer ? "   " : ""}
-      {r.trainer ? `T ${r.trainer}` : ""}
-    </Text>
-  ) : null}
-</View>
+                            {(r.jockey || r.trainer) ? (
+                              <View style={styles.runnerMetaStack}>
+                                {r.jockey ? (
+                                  <View style={[styles.metaGroup, { marginBottom: 2 }]}>
+                                    <Text style={styles.metaBadge}>J</Text>
+                                    <Text style={styles.runnerMetaText} numberOfLines={1}>
+                                      {r.jockey}
+                                    </Text>
+                                  </View>
+                                ) : null}
 
-                          <View style={styles.runnerInsetRight}>
-                            <Text
-                              style={styles.runnerInsetText}
-                              numberOfLines={1}
-                            >
+                                {r.trainer ? (
+                                  <View style={styles.metaGroup}>
+                                    <Text style={styles.metaBadge}>T</Text>
+                                    <Text style={styles.runnerMetaText} numberOfLines={1}>
+                                      {r.trainer}
+                                    </Text>
+                                  </View>
+                                ) : null}
+                              </View>
+                            ) : null}
+                          </View>
+
+                          {/* RIGHT: tall odds box */}
+                          <View style={styles.oddsTallBox}>
+                            <Text style={styles.runnerInsetText} numberOfLines={1}>
                               {oddsLabel}
                             </Text>
                           </View>
@@ -2721,14 +2978,15 @@ const isSelected = tippedHorseId && runnerHorseId && tippedHorseId === runnerHor
                 })()}
               </View>
             </>
-        </>
-      </View>
+          </>
+        </Animated.View>
 
-      <StatusBar style="auto" />
-    </ScrollView>
-  </View>
-);
+        <StatusBar style="auto" />
+      </ScrollView>
+    </View>
+  );
 }
+
 function RaceDetailsScreen({ race, initialHorse, onBack, onSubmitTip }) {
   const [selectedHorse, setSelectedHorse] = useState(initialHorse ?? null);
 
@@ -3028,14 +3286,28 @@ const myTipsForDay = useMemo(() => {
     {picked ? myTip.horseName : "No tip submitted for this race yet"}
   </Text>
 
-  {/* Jockey + Trainer (single small line underneath) */}
-  {(runner?.jockey || runner?.trainer) ? (
-    <Text style={styles.runnerMetaLineSingle} numberOfLines={1}>
-      {runner?.jockey ? `J ${runner.jockey}` : ""}
-      {runner?.jockey && runner?.trainer ? "   " : ""}
-      {runner?.trainer ? `T ${runner.trainer}` : ""}
-    </Text>
-  ) : null}
+{/* Jockey + Trainer */}
+{(runner?.jockey || runner?.trainer) ? (
+  <View style={styles.runnerMetaRow}>
+    {runner?.jockey ? (
+      <View style={styles.metaGroup}>
+        <Text style={styles.metaBadge}>J</Text>
+        <Text style={styles.runnerMetaText} numberOfLines={1}>
+          {runner.jockey}
+        </Text>
+      </View>
+    ) : null}
+
+    {runner?.trainer ? (
+      <View style={styles.metaGroup}>
+        <Text style={styles.metaBadge}>T</Text>
+        <Text style={styles.runnerMetaText} numberOfLines={1}>
+          {runner.trainer}
+        </Text>
+      </View>
+    ) : null}
+  </View>
+) : null}
 
   {/* ✅ Settlement-only notice: non-runner swap applied */}
   {picked && swapApplied ? (
@@ -3089,29 +3361,46 @@ function LeaderboardScreen({
   currentUserId,
   onBack,
   activeCompetitionId,
-  registeredUserIds,
 }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [usersMap, setUsersMap] = useState({});
-  const [days, setDays] = useState([]); // ["2026-01-17", "2026-01-18", ...]
-  const [mode, setMode] = useState("day"); // "day" | "overall"
+  const [usersLoaded, setUsersLoaded] = useState(false); // ✅ NEW
+  const [days, setDays] = useState([]);
+  const [mode, setMode] = useState("day");
   const [selectedDay, setSelectedDay] = useState(null);
 
   const LEADER_ROW_HEIGHT = 74;
   const listRef = React.useRef(null);
 
-  // Uncomment if you need to debug which competition is being used
-  // useEffect(() => {
-  //   console.log("Leaderboard activeCompetitionId:", activeCompetitionId);
-  // }, [activeCompetitionId]);
+  // ✅ NEW: two-line day label (e.g. "Sat 28\nFeb") so it wraps like Saved Tips
+  const formatDayLabelTwoLines = (dayStr) => {
+    const s = String(dayStr ?? "").trim();
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return s;
 
-  // Uncomment if you need to debug whether days are being loaded
-  // useEffect(() => {
-  //   console.log("Leaderboard days state:", days);
-  // }, [days]);
+    const y = Number(m[1]);
+    const mo = Number(m[2]) - 1;
+    const da = Number(m[3]);
 
-  // Load user profiles (for display names)
+    // Use UTC to avoid platform parsing quirks
+    const d = new Date(Date.UTC(y, mo, da));
+
+    const oneLine = d.toLocaleDateString("en-GB", {
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      timeZone: "Europe/London",
+    }); // e.g. "Sat 28 Feb"
+
+    const parts = oneLine.split(" "); // ["Sat","28","Feb"]
+    if (parts.length >= 3) {
+      return `${parts[0]} ${parts[1]}\n${parts.slice(2).join(" ")}`;
+    }
+    return oneLine;
+  };
+
+  // Load user profiles (for display names + registration status)
   useEffect(() => {
     const unsub = onSnapshot(
       collection(firestoreDb, "users"),
@@ -3121,6 +3410,7 @@ function LeaderboardScreen({
           map[d.id] = d.data();
         });
         setUsersMap(map);
+        setUsersLoaded(true); // ✅ NEW
       },
       (err) => showMessage("Users load error", err.message)
     );
@@ -3128,7 +3418,22 @@ function LeaderboardScreen({
     return unsub;
   }, []);
 
-  // ✅ Load competition days from competitions/{id}.days (source of truth)
+  // ✅ Build a Set of registered userIds for the active competition
+  const registeredSet = React.useMemo(() => {
+    if (!activeCompetitionId) return null;
+    if (!usersLoaded) return null; // ✅ NEW: don’t filter until users loaded
+
+    const set = new Set();
+    Object.entries(usersMap || {}).forEach(([uid, u]) => {
+      const ids = Array.isArray(u?.registeredCompetitionIds)
+        ? u.registeredCompetitionIds
+        : [];
+      if (ids.includes(activeCompetitionId)) set.add(uid);
+    });
+    return set;
+  }, [usersMap, activeCompetitionId, usersLoaded]);
+
+  // Load competition days
   useEffect(() => {
     if (!activeCompetitionId) {
       setDays([]);
@@ -3165,6 +3470,13 @@ function LeaderboardScreen({
     return unsub;
   }, [activeCompetitionId]);
 
+  // ✅ If no days exist yet, default to overall
+  useEffect(() => {
+    if (mode === "day" && (!days || days.length === 0)) {
+      setMode("overall");
+    }
+  }, [mode, days]);
+
   // Load leaderboard rows based on mode + selectedDay
   useEffect(() => {
     if (!activeCompetitionId) {
@@ -3173,7 +3485,6 @@ function LeaderboardScreen({
       return;
     }
 
-    // If in day mode but we don't have a day yet, wait
     if (mode === "day" && !selectedDay) {
       setRows([]);
       setLoading(false);
@@ -3184,12 +3495,7 @@ function LeaderboardScreen({
 
     const baseCollection =
       mode === "overall"
-        ? collection(
-            firestoreDb,
-            "competitions",
-            activeCompetitionId,
-            "leaderboard"
-          )
+        ? collection(firestoreDb, "competitions", activeCompetitionId, "leaderboard")
         : collection(
             firestoreDb,
             "competitions",
@@ -3213,14 +3519,33 @@ function LeaderboardScreen({
           ...d.data(),
         }));
 
-        const restrictToRegistered =
-          Array.isArray(registeredUserIds) && registeredUserIds.length > 0;
+        // ✅ NEW: daily leaderboards should include EVERY registered user
+        // even if they have no doc yet for the day (0 tips / £0.00).
+        let merged = list;
 
-        const filtered = restrictToRegistered
-          ? list.filter((r) => registeredUserIds.includes(r.userId))
-          : list;
+        if (registeredSet) {
+          if (mode === "day") {
+            const byId = new Map(list.map((r) => [r.userId, r]));
 
-        const withNames = filtered.map((r) => ({
+            // Add missing registered users with 0s
+            registeredSet.forEach((uid) => {
+              if (!byId.has(uid)) {
+                byId.set(uid, {
+                  userId: uid,
+                  totalReturnInclStake: 0,
+                  tips: 0,
+                });
+              }
+            });
+
+            merged = Array.from(byId.values());
+          } else {
+            // OVERALL: restrict to registered users
+            merged = list.filter((r) => registeredSet.has(r.userId));
+          }
+        }
+
+        const withNames = merged.map((r) => ({
           ...r,
           displayName:
             usersMap?.[r.userId]?.displayName ||
@@ -3229,6 +3554,15 @@ function LeaderboardScreen({
           gbp: Number(r.totalReturnInclStake ?? 0),
           tips: Number(r.tips ?? 0),
         }));
+
+        // ✅ Ensure consistent ordering after merging in zero rows
+        withNames.sort((a, b) => {
+          const diff = (b.gbp ?? 0) - (a.gbp ?? 0);
+          if (diff !== 0) return diff;
+          const tipsDiff = (b.tips ?? 0) - (a.tips ?? 0);
+          if (tipsDiff !== 0) return tipsDiff;
+          return String(a.displayName ?? "").localeCompare(String(b.displayName ?? ""));
+        });
 
         setRows(withNames);
         setLoading(false);
@@ -3240,7 +3574,7 @@ function LeaderboardScreen({
     );
 
     return unsub;
-  }, [activeCompetitionId, registeredUserIds, usersMap, mode, selectedDay]);
+  }, [activeCompetitionId, usersMap, registeredSet, mode, selectedDay]);
 
   const myIndex = rows.findIndex((r) => r.userId === currentUserId);
   const myRow = myIndex >= 0 ? rows[myIndex] : null;
@@ -3270,21 +3604,20 @@ function LeaderboardScreen({
     });
   };
 
-const renderSegment = (label, isActive, onPress) => (
-  <Pressable
-    onPress={onPress}
-    style={[
-      styles.smallChoice,
-      { flex: 1 },                 // keeps equal width like segments
-      isActive && styles.cardActive,
-    ]}
-  >
-    <Text style={styles.smallChoiceText} numberOfLines={1}>
-      {label}
-    </Text>
-  </Pressable>
-);
-
+  const renderSegment = (label, isActive, onPress) => (
+    <Pressable
+      onPress={onPress}
+      style={[
+        styles.smallChoice,
+        { flex: 1 }, // keeps equal width like segments
+        isActive && styles.cardActive,
+      ]}
+    >
+      <Text style={styles.smallChoiceText} numberOfLines={1}>
+        {label}
+      </Text>
+    </Pressable>
+  );
 
   return (
     <View style={styles.container}>
@@ -3292,51 +3625,49 @@ const renderSegment = (label, isActive, onPress) => (
         <Text style={styles.title}>Leaderboard</Text>
 
         {/* ✅ My Tips–style segmented selector: days + overall */}
-<View style={styles.segmentWrap}>
-
-  {/* OVERALL – full width */}
-  <Pressable
-    onPress={() => setMode("overall")}
-    style={[
-      styles.smallChoice,
-      styles.overallChoice,
-      mode === "overall" && styles.cardActive,
-    ]}
-  >
-    <Text style={styles.smallChoiceText}>Overall</Text>
-  </Pressable>
-
-  {/* DAY BUTTONS */}
-  <View style={styles.segmentRow}>
-    {days.map((d) => {
-      const active = mode === "day" && selectedDay === d;
-
-      return (
-        <Pressable
-          key={d}
-          onPress={() => {
-            setMode("day");
-            setSelectedDay(d);
-          }}
-          style={[
-            styles.smallChoice,
-            styles.dayChoice,
-            active && styles.cardActive,
-          ]}
-        >
-          <Text
-            style={styles.smallChoiceText}
-            numberOfLines={1}
-            ellipsizeMode="tail"
+        <View style={styles.segmentWrap}>
+          {/* OVERALL – full width */}
+          <Pressable
+            onPress={() => setMode("overall")}
+            style={[
+              styles.smallChoice,
+              styles.overallChoice,
+              mode === "overall" && styles.cardActive,
+            ]}
           >
-            {formatDayLabel(d)}
-          </Text>
-        </Pressable>
-      );
-    })}
-  </View>
-</View>
+            <Text style={styles.smallChoiceText}>Overall</Text>
+          </Pressable>
 
+          {/* DAY BUTTONS */}
+          <View style={styles.segmentRow}>
+            {days.map((d) => {
+              const active = mode === "day" && selectedDay === d;
+
+              return (
+                <Pressable
+                  key={d}
+                  onPress={() => {
+                    setMode("day");
+                    setSelectedDay(d);
+                  }}
+                  style={[
+                    styles.smallChoice,
+                    styles.dayChoice,
+                    active && styles.cardActive,
+                  ]}
+                >
+                  <Text
+                    style={[styles.smallChoiceText, styles.dayTabText]}
+                    numberOfLines={2}
+                    ellipsizeMode="clip"
+                  >
+                    {formatDayLabelTwoLines(d)}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
 
         {loading ? (
           <Text style={styles.subtitle}>Loading leaderboard…</Text>
@@ -3371,7 +3702,7 @@ const renderSegment = (label, isActive, onPress) => (
                 {mode === "overall"
                   ? "No overall results yet."
                   : selectedDay
-                  ? `No results for ${selectedDay} yet.`
+                  ? `This leaderboard will show once the first race is confirmed.`
                   : "No results yet."}
               </Text>
             ) : (
@@ -3381,7 +3712,9 @@ const renderSegment = (label, isActive, onPress) => (
                 keyExtractor={(item) => item.userId}
                 style={{ flex: 1, marginTop: 10 }}
                 contentContainerStyle={{ paddingBottom: 16 }}
-                ListFooterComponent={<View style={{ height: FOOTER_HEIGHT + 28 }} />}
+                ListFooterComponent={
+                  <View style={{ height: FOOTER_HEIGHT + 28 }} />
+                }
                 getItemLayout={(_, index) => ({
                   length: LEADER_ROW_HEIGHT,
                   offset: LEADER_ROW_HEIGHT * index,
@@ -4499,7 +4832,7 @@ heroKicker: {
   marginBottom: 4,
 },
 heroHeadline: {
-  fontSize: 46,
+  fontSize: 36,
   fontWeight: "900",
   color: "#f59f00",
   textAlign: "center",
@@ -5108,15 +5441,23 @@ runnerMetaIcon: {
 },
 
 runnerMetaText: {
-  fontSize: 10,
-  fontWeight: "700",
+  fontSize: 12,
   color: THEME.text2,
+  flexShrink: 1,
 },
 
 runnerMetaRow: {
-  flexDirection: "row",
-  flexWrap: "wrap",
+  flexDirection: "column",   // ✅ stack J above T
+  alignItems: "flex-start",
   marginTop: 2,
+  gap: 4,                    // smaller vertical gap
+},
+
+metaGroup: {
+  flexDirection: "row",
+  alignItems: "center",
+  gap: 6,
+  flexShrink: 1,
 },
 
 runnerMetaLineSingle: {
@@ -5279,6 +5620,258 @@ overallChoice: {
 
 dayChoice: {
   flex: 1, // evenly spreads dates across the row
+},
+
+placementRow: {
+  flexDirection: "row",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 10,
+},
+
+placementText: {
+  flex: 1,
+},
+
+tipsPill: {
+  paddingVertical: 4,
+  paddingHorizontal: 10,
+  borderRadius: 999,
+  backgroundColor: "rgba(0,0,0,0.06)",
+  borderWidth: 1,
+  borderColor: "rgba(0,0,0,0.08)",
+},
+
+tipsPillText: {
+  fontSize: 12,
+  fontWeight: "600",
+  color: "rgba(0,0,0,0.70)",
+},
+
+dayTabText: {
+  textAlign: "center",
+  lineHeight: 16,
+  flexShrink: 1,
+},
+
+rankCardContent: {
+  alignItems: "center",
+  justifyContent: "center",
+},
+
+rankCardTitle: {
+  fontSize: 13,
+  letterSpacing: 0.4,
+  color: THEME.text2,
+  marginBottom: 6,
+},
+
+rankCardPosition: {
+  fontSize: 22,
+  fontWeight: "700",
+  color: THEME.text1,
+},
+
+rankCardOf: {
+  fontSize: 16,
+  fontWeight: "500",
+  color: THEME.text2,
+},
+
+rankCardAmount: {
+  marginTop: 6,
+  fontSize: 15,
+  fontWeight: "600",
+  color: THEME.text2,
+},
+
+
+metaGroup: {
+  flexDirection: "row",
+  alignItems: "center",
+  gap: 6,
+  flexShrink: 1,
+},
+
+metaBadge: {
+  fontSize: 10,
+  fontWeight: "700",
+  paddingHorizontal: 6,
+  paddingVertical: 2,
+  borderRadius: 6,
+  backgroundColor: "rgba(0,0,0,0.06)",
+  color: THEME.text2,
+  overflow: "hidden",
+},
+
+runnerMetaText: {
+  fontSize: 12,
+  color: THEME.text2,
+  flexShrink: 1,
+},
+
+raceHeaderTopRow: {
+  flexDirection: "row",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 10,
+  marginBottom: 6,
+},
+
+mostTippedInline: {
+  flexDirection: "row",
+  alignItems: "center",
+  gap: 8,
+  paddingVertical: 6,
+  paddingHorizontal: 10,
+  borderRadius: 12,
+  backgroundColor: "rgba(255, 170, 0, 0.12)",
+  borderWidth: 1,
+  borderColor: "rgba(255, 170, 0, 0.25)",
+  maxWidth: 210,
+},
+
+mostTippedInlineText: {
+  fontSize: 12,
+  color: THEME.text2,
+  fontWeight: "600",
+  flexShrink: 1,
+},
+
+mostTippedInlineHorse: {
+  color: THEME.text1,
+  fontWeight: "800",
+},
+
+mostTippedInlineUnder: {
+  flexDirection: "row",
+  alignItems: "center",
+  gap: 8,
+  paddingVertical: 6,
+  paddingHorizontal: 10,
+  borderRadius: 12,
+  backgroundColor: "rgba(255, 170, 0, 0.12)",
+  borderWidth: 1,
+  borderColor: "rgba(255, 170, 0, 0.25)",
+  marginTop: 8,
+  marginBottom: 8, // gives breathing room before "Tips close in"
+  alignSelf: "flex-start", // keeps it neatly under the date, not stretched
+},
+
+runnerRowTop: {
+  flexDirection: "row",
+  alignItems: "flex-start",
+},
+
+runnerInsetLeftTop: {
+  alignSelf: "flex-start",
+  marginTop: 2,
+},
+
+runnerMain: {
+  flex: 1,
+  paddingLeft: 10,
+},
+
+runnerMetaUnderNumber: {
+  marginTop: 4,
+  marginLeft: -10,
+},
+
+runnerRightCol: {
+  alignItems: "flex-end",
+  gap: 6,
+  minWidth: 80,
+},
+
+pickCtaPill: {
+  paddingHorizontal: 10,
+  paddingVertical: 5,
+  borderRadius: 12,
+  backgroundColor: "rgba(0,0,0,0.06)",
+  borderWidth: 1,
+  borderColor: "rgba(0,0,0,0.08)",
+},
+
+pickCtaText: {
+  fontSize: 12,
+  fontWeight: "800",
+  color: THEME.text1,
+},
+
+runnerMetaFullRow: {
+  marginTop: 4,
+},
+
+// ✅ Pull meta left so it lines up with the left edge of the number inset
+// If it’s slightly off, adjust this number to match your runnerInsetLeft width + gap.
+runnerMetaFullRow: {
+  flexDirection: "row",
+  marginTop: 4,
+},
+
+// IMPORTANT: set this to match your number inset column width + the gap to runnerMain
+// Start with 54–60, tweak once if needed.
+runnerMetaLeftSpacer: {
+  width: 56,
+},
+
+runnerMetaContent: {
+  flex: 1,
+},
+
+runnerMetaStack: {
+  marginTop: 4,
+},
+
+runnerRowNew: {
+  flexDirection: "row",
+  alignItems: "flex-start",
+},
+
+runnerLeftStack: {
+  alignItems: "center",
+  gap: 8,
+},
+
+pickUnderNumberPill: {
+  width: 60,
+  paddingVertical: 6,
+  borderRadius: 12,
+  backgroundColor: "rgba(0,0,0,0.06)",
+  borderWidth: 1,
+  borderColor: "rgba(0,0,0,0.08)",
+  alignItems: "center",
+  justifyContent: "center",
+},
+
+pickUnderNumberText: {
+  fontSize: 12,
+  fontWeight: "800",
+  color: THEME.text1,
+},
+
+oddsTallBox: {
+  alignSelf: "stretch",
+  minWidth: 72,
+  borderRadius: 14,
+  backgroundColor: "rgba(0,0,0,0.06)",
+  borderWidth: 1,
+  borderColor: "rgba(0,0,0,0.08)",
+  alignItems: "center",
+  justifyContent: "center",
+  paddingHorizontal: 10,
+},
+
+runnerInsetLeftUnified: {
+  width: 60,
+  height: 36,
+  borderRadius: 12,
+  backgroundColor: "rgba(0,0,0,0.06)",
+  borderWidth: 1,
+  borderColor: "rgba(0,0,0,0.08)",
+  alignItems: "center",
+  justifyContent: "center",
 },
 
 });

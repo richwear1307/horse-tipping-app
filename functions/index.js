@@ -27,6 +27,10 @@
  * ✅ EXTRA FIX (NEW):
  * - Derive the day directly from raceId if possible (raceId starts with YYYY-MM-DD_...)
  *   This avoids missing/invalid date fields on race/result documents.
+ *
+ * ✅ EXTRA FIX (CORS):
+ * - For Expo Web, Gen2 callables must return CORS headers.
+ * - We enable cors on all onCall functions used by the web client.
  */
 
 "use strict";
@@ -58,12 +62,81 @@ setGlobalOptions({ maxInstances: 10 });
 const nodemailer = require("nodemailer");
 const SMTP_CONFIG = defineJsonSecret("SMTP_CONFIG");
 
+// ------------------------------
+// ✅ Auth/PIN helpers
+// ------------------------------
+const crypto = require("crypto");
+
+/**
+ * Normalize user-entered usernames into a Firestore-safe key:
+ * - trim + lowercase
+ * - convert any whitespace run to "-"
+ * - remove any chars not in [a-z0-9._-]
+ * - collapse multiple "-" to single "-"
+ */
+function normalizeUsernameKey(username) {
+  return String(username || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9._-]/g, "")
+    .replace(/-+/g, "-");
+}
+
+/** Validate PIN is 4–6 digits */
+function assertValidPin(pin) {
+  const s = String(pin || "");
+  if (!/^\d{4,6}$/.test(s)) {
+    throw new HttpsError("invalid-argument", "PIN must be 4–6 digits");
+  }
+  return s;
+}
+
+/**
+ * Derive a hash using scrypt (slow KDF). Store:
+ * - pinSalt (base64)
+ * - pinHash (base64)
+ *
+ * NOTE: This uses sync scrypt for simplicity; fine for low volume.
+ * If you expect high auth volume, switch to crypto.scrypt (async).
+ */
+function hashPinScrypt(pin, saltBuf) {
+  const key = crypto.scryptSync(pin, saltBuf, 64, { N: 16384, r: 8, p: 1 });
+  return key.toString("base64");
+}
+
+function timingSafeEqualB64(aB64, bB64) {
+  const a = Buffer.from(String(aB64 || ""), "base64");
+  const b = Buffer.from(String(bB64 || ""), "base64");
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+function newRandomTokenB64url(bytes = 32) {
+  return crypto.randomBytes(bytes).toString("base64url");
+}
+
+function hashTokenSha256B64(token) {
+  return crypto.createHash("sha256").update(token).digest("base64");
+}
+
+// ✅ CORS helper for Gen2 callable functions (Expo Web)
+const CALLABLE_BASE = {
+  region: "europe-west2",
+  cors: true, // ✅ fixes Expo Web CORS preflight on callable endpoints
+};
+
 /**
  * Callable: Send a custom-branded magic sign-in link email via IONOS SMTP.
+ *
+ * NOTE:
+ * This function generates a Firebase Auth email-link sign-in URL.
+ * If you're moving to "username + PIN" accounts (custom token auth),
+ * prefer implementing a custom magic-link flow (token you generate + consume).
  */
 exports.sendMagicLink = onCall(
   {
-    region: "europe-west2",
+    ...CALLABLE_BASE,
     secrets: [SMTP_CONFIG],
   },
   async (request) => {
@@ -111,7 +184,353 @@ exports.sendMagicLink = onCall(
 );
 
 // -----------------------------------------------------------------------------
-// ✅ NEW: Seed overall leaderboard entry as soon as a user is registered
+// ✅ Username + PIN auth (custom token) + custom magic link (by username)
+// -----------------------------------------------------------------------------
+
+/**
+ * Callable: Sign up with Username + PIN (+ optional email)
+ *
+ * Creates:
+ *   usernames/{usernameKey} -> { uid }
+ *   users/{uid} -> profile + pinHash/salt
+ *
+ * Returns:
+ *   { token, uid }
+ */
+exports.authSignUp = onCall(
+  { ...CALLABLE_BASE },
+  async (request) => {
+    const db = admin.firestore();
+
+    const username = String(request.data?.username || "").trim();
+    const usernameKey = normalizeUsernameKey(username);
+    const pin = assertValidPin(request.data?.pin);
+
+    // email optional
+    const emailRaw = request.data?.email;
+    const email = emailRaw ? String(emailRaw).trim().toLowerCase() : null;
+
+    if (!usernameKey) {
+      throw new HttpsError("invalid-argument", "Username required");
+    }
+
+    // Create a new uid (also used as users/{uid} doc id)
+    const uid = db.collection("users").doc().id;
+
+    const unameRef = db.collection("usernames").doc(usernameKey);
+    const userRef = db.collection("users").doc(uid);
+
+    const salt = crypto.randomBytes(16);
+    const pinHash = hashPinScrypt(pin, salt);
+
+    // Enforce unique username via transaction
+    await db.runTransaction(async (tx) => {
+      const unameSnap = await tx.get(unameRef);
+      if (unameSnap.exists) {
+        throw new HttpsError("already-exists", "Username already taken");
+      }
+
+      tx.set(unameRef, { uid }, { merge: false });
+
+      tx.set(
+        userRef,
+        {
+          uid,
+          username,
+          usernameKey,
+          email: email || null,
+
+          pinHash,
+          pinSalt: salt.toString("base64"),
+
+          failedPinAttempts: 0,
+          pinLockUntil: null,
+
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: false }
+      );
+    });
+
+    // Mint a Firebase custom token (Firebase Auth user will be created on first sign-in)
+    const token = await admin.auth().createCustomToken(uid);
+    return { token, uid };
+  }
+);
+
+/**
+ * Callable: Login with Username + PIN
+ *
+ * Returns:
+ *   { token, uid }
+ *
+ * Security:
+ * - account lockout after repeated failures (fields on users/{uid})
+ */
+exports.authSignInWithPin = onCall(
+  { ...CALLABLE_BASE },
+  async (request) => {
+    const db = admin.firestore();
+
+    const usernameKey = normalizeUsernameKey(request.data?.username);
+    const pin = assertValidPin(request.data?.pin);
+
+    if (!usernameKey) {
+      throw new HttpsError("invalid-argument", "Username required");
+    }
+
+    const unameRef = db.collection("usernames").doc(usernameKey);
+    const unameSnap = await unameRef.get();
+
+    // Avoid revealing whether a username exists
+    if (!unameSnap.exists) {
+      throw new HttpsError("permission-denied", "Invalid credentials");
+    }
+
+    const { uid } = unameSnap.data() || {};
+    if (!uid) {
+      throw new HttpsError("permission-denied", "Invalid credentials");
+    }
+
+    const userRef = db.collection("users").doc(uid);
+
+    // Verify PIN + apply lockout rules inside a transaction
+    await db.runTransaction(async (tx) => {
+      const userSnap = await tx.get(userRef);
+      if (!userSnap.exists) {
+        throw new HttpsError("permission-denied", "Invalid credentials");
+      }
+
+      const u = userSnap.data() || {};
+      const now = Date.now();
+
+      const lockUntilMs =
+        u.pinLockUntil?.toMillis && typeof u.pinLockUntil.toMillis === "function"
+          ? u.pinLockUntil.toMillis()
+          : 0;
+
+      if (lockUntilMs && lockUntilMs > now) {
+        throw new HttpsError(
+          "resource-exhausted",
+          "Too many attempts. Try again later."
+        );
+      }
+
+      const saltB64 = String(u.pinSalt || "");
+      const storedHashB64 = String(u.pinHash || "");
+
+      if (!saltB64 || !storedHashB64) {
+        // User has no PIN set
+        throw new HttpsError("permission-denied", "Invalid credentials");
+      }
+
+      const salt = Buffer.from(saltB64, "base64");
+      const computedHashB64 = hashPinScrypt(pin, salt);
+
+      const ok = timingSafeEqualB64(computedHashB64, storedHashB64);
+
+      if (!ok) {
+        const failed = Number(u.failedPinAttempts || 0) + 1;
+
+        // Backoff lock policy
+        // 1-4: no lock
+        // 5: 5 min
+        // 6: 15 min
+        // 7+: 60 min
+        let lockMs = 0;
+        if (failed === 5) lockMs = 5 * 60 * 1000;
+        else if (failed === 6) lockMs = 15 * 60 * 1000;
+        else if (failed >= 7) lockMs = 60 * 60 * 1000;
+
+        tx.set(
+          userRef,
+          {
+            failedPinAttempts: failed,
+            pinLockUntil: lockMs
+              ? admin.firestore.Timestamp.fromMillis(now + lockMs)
+              : null,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        throw new HttpsError("permission-denied", "Invalid credentials");
+      }
+
+      // Success: reset lock counters
+      tx.set(
+        userRef,
+        {
+          failedPinAttempts: 0,
+          pinLockUntil: null,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    });
+
+    const token = await admin.auth().createCustomToken(uid);
+    return { token, uid };
+  }
+);
+
+/**
+ * Callable: Request a magic link by username (ONLY sends if user has email set)
+ * Stores a one-time token hash + expiry on users/{uid}, emails the link via SMTP.
+ *
+ * Returns { ok:true } always (to avoid leaking which usernames exist).
+ */
+exports.authRequestMagicLink = onCall(
+  {
+    ...CALLABLE_BASE,
+    secrets: [SMTP_CONFIG],
+  },
+  async (request) => {
+    const db = admin.firestore();
+    const usernameKey = normalizeUsernameKey(request.data?.username);
+
+    // Always return ok to avoid username enumeration
+    if (!usernameKey) return { ok: true };
+
+    const unameSnap = await db.collection("usernames").doc(usernameKey).get();
+    if (!unameSnap.exists) return { ok: true };
+
+    const { uid } = unameSnap.data() || {};
+    if (!uid) return { ok: true };
+
+    const userRef = db.collection("users").doc(uid);
+    const userSnap = await userRef.get();
+    if (!userSnap.exists) return { ok: true };
+
+    const user = userSnap.data() || {};
+    const email = user.email ? String(user.email).trim().toLowerCase() : null;
+    if (!email) return { ok: true };
+
+    // Create one-time token and store only a hash
+    const token = newRandomTokenB64url(32);
+    const tokenHash = hashTokenSha256B64(token);
+    const expiresAt = admin.firestore.Timestamp.fromMillis(
+      Date.now() + 15 * 60 * 1000
+    ); // 15 min
+
+    await userRef.set(
+      {
+        magicLinkHash: tokenHash,
+        magicLinkExpiresAt: expiresAt,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    const { host, port, user: smtpUser, pass, from } = SMTP_CONFIG.value();
+
+    const transporter = nodemailer.createTransport({
+      host,
+      port: Number(port || 587),
+      secure: Number(port) === 465,
+      auth: { user: smtpUser, pass },
+    });
+
+    // Your web route should read u + t and call authConsumeMagicLink
+    const link = `https://tcctips.com/magic?u=${encodeURIComponent(
+      usernameKey
+    )}&t=${encodeURIComponent(token)}`;
+
+    await transporter.sendMail({
+      from: from || `"Thoronton CC Cheltenham Tipping Competition" <${smtpUser}>`,
+      to: email,
+      subject: "Your sign-in link",
+      html: `
+        <p>Hello,</p>
+        <p>Click below to sign in:</p>
+        <p>
+          <a href="${link}" style="display:inline-block;padding:12px 18px;text-decoration:none;border-radius:8px;font-weight:700;">
+            Sign in to TCC Tipping Competition
+          </a>
+        </p>
+        <p>This link expires in 15 minutes and can only be used once.</p>
+        <p>If you didn’t request this, you can ignore this email.</p>
+      `,
+    });
+
+    return { ok: true };
+  }
+);
+
+/**
+ * Callable: Consume a magic link (usernameKey + token) and return a custom token.
+ * One-time use: clears magicLinkHash + magicLinkExpiresAt after success.
+ *
+ * Returns:
+ *   { token, uid }
+ */
+exports.authConsumeMagicLink = onCall(
+  { ...CALLABLE_BASE },
+  async (request) => {
+    const db = admin.firestore();
+
+    const usernameKey = normalizeUsernameKey(request.data?.usernameKey);
+    const token = String(request.data?.token || "");
+
+    if (!usernameKey || !token) {
+      throw new HttpsError("invalid-argument", "Invalid link");
+    }
+
+    const unameSnap = await db.collection("usernames").doc(usernameKey).get();
+    if (!unameSnap.exists) {
+      throw new HttpsError("permission-denied", "Invalid link");
+    }
+
+    const { uid } = unameSnap.data() || {};
+    if (!uid) {
+      throw new HttpsError("permission-denied", "Invalid link");
+    }
+
+    const userRef = db.collection("users").doc(uid);
+    const tokenHash = hashTokenSha256B64(token);
+
+    await db.runTransaction(async (tx) => {
+      const snap = await tx.get(userRef);
+      if (!snap.exists) {
+        throw new HttpsError("permission-denied", "Invalid link");
+      }
+
+      const u = snap.data() || {};
+
+      const expMs =
+        u.magicLinkExpiresAt?.toMillis &&
+        typeof u.magicLinkExpiresAt.toMillis === "function"
+          ? u.magicLinkExpiresAt.toMillis()
+          : 0;
+
+      if (!u.magicLinkHash || !expMs || expMs < Date.now()) {
+        throw new HttpsError("permission-denied", "Link expired");
+      }
+
+      if (String(u.magicLinkHash) !== tokenHash) {
+        throw new HttpsError("permission-denied", "Invalid link");
+      }
+
+      // One-time use: clear token
+      tx.set(
+        userRef,
+        {
+          magicLinkHash: admin.firestore.FieldValue.delete(),
+          magicLinkExpiresAt: admin.firestore.FieldValue.delete(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    });
+
+    const firebaseToken = await admin.auth().createCustomToken(uid);
+    return { token: firebaseToken, uid };
+  }
+);
+
+// -----------------------------------------------------------------------------
+// ✅ Seed overall leaderboard entry as soon as a user is registered
 // -----------------------------------------------------------------------------
 exports.seedLeaderboardOnRegistration = onDocumentUpdated(
   {
@@ -612,9 +1031,7 @@ exports.settleRaceOnResult = onDocumentWritten(
             continue;
           }
 
-          const oddsDisplay = String(
-            p?.oddsDisplay ?? p?.oddsInput ?? ""
-          ).trim();
+          const oddsDisplay = String(p?.oddsDisplay ?? p?.oddsInput ?? "").trim();
           if (oddsDisplay) officialOddsByHorseId[horseId] = oddsDisplay;
 
           const od = p?.oddsDecimal;
@@ -624,9 +1041,7 @@ exports.settleRaceOnResult = onDocumentWritten(
         }
 
         logger.info(
-          `Built official odds map for race ${raceId}. entries=${Object.keys(
-            officialOddsByHorseId
-          ).length}`
+          `Built official odds map for race ${raceId}. entries=${Object.keys(officialOddsByHorseId).length}`
         );
       } else {
         logger.info(
@@ -642,10 +1057,7 @@ exports.settleRaceOnResult = onDocumentWritten(
       if (Array.isArray(result.placements)) {
         result.placements.forEach((p) => {
           if (!p?.horseId || !p?.horseName) return;
-          placementNameToHorseId.set(
-            normName(p.horseName),
-            String(p.horseId).trim()
-          );
+          placementNameToHorseId.set(normName(p.horseName), String(p.horseId).trim());
         });
       }
     } catch (err) {
