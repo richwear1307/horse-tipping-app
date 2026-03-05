@@ -562,6 +562,7 @@ const [horsesById, setHorsesById] = useState({});
 const [myProfile, setMyProfile] = useState(null); // ✅ NEW: current user's profile doc
 const [usersMap, setUsersMap] = useState({});     // (keep this for admin screens like entrants)
 const isAdmin = !!myProfile?.isAdmin;             // ✅ admin comes from your own doc
+const missingDisplayName = !myProfile?.displayName?.trim();
 
   // Competitions (Option B: one active competition for everyone)
   const [competitions, setCompetitions] = useState([]);
@@ -1541,8 +1542,10 @@ if (screen === "leaderboard") {
   onAdmin={isAdmin ? () => setScreen("adminSelectCompetition") : null}
 />
       <HomeScreen
-        userEmail={user.email}
-        isAdmin={isAdmin}
+  userEmail={user.email}
+  isAdmin={isAdmin}
+  missingDisplayName={missingDisplayName}
+  goProfile={() => setScreen("profile")}
         todayRank={homeLeaderboard.dayRank}
         todayTotalUsers={homeLeaderboard.dayTotalUsers}
         todayWinnings={homeLeaderboard.dayWinnings}
@@ -2015,6 +2018,8 @@ function HomeScreen({
   results,
   nowTick,
   isAdmin,
+  missingDisplayName,
+  goProfile,
   todayRank,
   todayTotalUsers,
   todayWinnings,
@@ -2221,6 +2226,20 @@ function HomeScreen({
             </View>
           </ImageBackground>
         </View>
+        {missingDisplayName && (
+  <Pressable
+    onPress={goProfile}
+    style={styles.displayNameAlert}
+  >
+    <Text style={styles.displayNameAlertText}>
+      ⚠ Set a display name so we can identify you on the leaderboard.
+    </Text>
+
+    <Text style={styles.displayNameAlertLink}>
+      Tap here to update your profile →
+    </Text>
+  </Pressable>
+)}
 
         <View style={styles.statsRow}>
           {/* LEFT: Today */}
@@ -2610,16 +2629,16 @@ function ProfileScreen({ user, onBack }) {
       }
 
       await setDoc(
-        doc(firestoreDb, "users", user.uid),
-        {
-          displayName: displayName, // EXACTLY as typed
-          email: user.email ?? email ?? "", // ✅ NEW: saved alongside name
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true }
-      );
+  doc(firestoreDb, "users", user.uid),
+  {
+    displayName: displayName,
+    email: email ?? user.email ?? "",
+    updatedAt: serverTimestamp(),
+  },
+  { merge: true }
+);
 
-      showMessage("Saved ✅", "Your display name has been updated.");
+      showMessage("Saved ✅", "Your details have been updated.");
     } catch (e) {
       showMessage("Save failed", e.message);
     } finally {
@@ -2647,15 +2666,19 @@ function ProfileScreen({ user, onBack }) {
             />
 
             {/* ✅ NEW: Email field */}
-            <Text style={[styles.subtitle, { marginTop: 14 }]}>Email address</Text>
+            <Text style={[styles.subtitle, { marginTop: 14 }]}>Email address (For password recovery)</Text>
 
             <TextInput
-              value={email}
-              placeholderTextColor={THEME.text3}
-              editable={false}
-              selectTextOnFocus={false}
-              style={[styles.input, { opacity: 0.7 }]}
-            />
+  value={email}
+  onChangeText={setEmail}
+  placeholderTextColor={THEME.text3}
+  editable={true}
+  selectTextOnFocus={true}
+  keyboardType="email-address"
+  autoCapitalize="none"
+  autoCorrect={false}
+  style={styles.input}
+/>
 
             <Pressable
               style={[
@@ -6194,6 +6217,33 @@ landingHeroWrap: {
 
 landingHeroImage: {
   justifyContent: "flex-start",
+},
+
+displayNameAlert: {
+  marginHorizontal: 16,
+  marginTop: 10,
+  marginBottom: 6,
+  paddingVertical: 14,
+  paddingHorizontal: 16,
+  borderRadius: 12,
+  backgroundColor: "#FFF3CD",
+  borderWidth: 1,
+  borderColor: "#FFC107",
+  alignItems: "center",
+},
+
+displayNameAlertText: {
+  fontSize: 15,
+  fontWeight: "600",
+  color: "#856404",
+  textAlign: "center",
+},
+
+displayNameAlertLink: {
+  marginTop: 4,
+  fontSize: 14,
+  fontWeight: "700",
+  color: "#D97706",
 },
 
 });
