@@ -14,7 +14,15 @@ import {
   ImageBackground,
   Animated,
   Switch,
+  Image,
 } from "react-native";
+
+import {
+  signUpWithPin,
+  loginWithPin,
+  requestMagicLink,
+  consumeMagicLinkFromUrlIfPresent,
+} from "./services/authApi";
 
 import { getFunctions, httpsCallable } from "firebase/functions";
 
@@ -32,13 +40,8 @@ import { Picker } from "@react-native-picker/picker";
 
 import { auth, db as firestoreDb } from "./firebaseConfig";
 import {
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
   onAuthStateChanged,
   signOut,
-  sendSignInLinkToEmail,
-  isSignInWithEmailLink,     // ✅ (finish handler)
-  signInWithEmailLink,       // ✅ (finish handler)
 } from "firebase/auth";
 
 import {
@@ -57,8 +60,6 @@ import {
   arrayRemove,
   serverTimestamp,
 } from "firebase/firestore";
-
-import InstallBanner from "./components/InstallBanner";
 
 // ---- GA4 helper (web only) ----
 function gaEvent(name, params = {}) {
@@ -492,44 +493,20 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
 
-  // ✅ NEW: finish email-link sign-in on web when user clicks the magic link
-  useEffect(() => {
-    if (Platform.OS !== "web") return;
-    if (typeof window === "undefined") return;
-
-    const href = window.location.href;
-
-    // Only run when the URL is an email sign-in link
-    if (!isSignInWithEmailLink(auth, href)) return;
-
-    (async () => {
-      try {
-        let email = window.localStorage.getItem("emailForSignIn");
-
-        // If they opened link on a different device/browser, ask for email
-        if (!email) {
-          email = window.prompt("Confirm your email to finish signing in:");
-        }
-
-        if (!email) {
-          showMessage("Email required", "Please enter your email to finish signing in.");
-          return;
-        }
-
-        await signInWithEmailLink(auth, email, href);
-        window.localStorage.removeItem("emailForSignIn");
-
-        // Optional: clean the URL (removes oobCode, apiKey, etc.)
+useEffect(() => {
+  // Web: if URL has ?u=...&t=..., consume it and sign in.
+  consumeMagicLinkFromUrlIfPresent()
+    .then(({ consumed }) => {
+      if (consumed && typeof window !== "undefined") {
+        // optional: clean the URL after successful sign-in
         window.history.replaceState({}, document.title, window.location.origin);
-      } catch (e) {
-        console.log("signInWithEmailLink failed:", e?.code, e?.message);
-        showMessage(
-          "Sign-in link failed",
-          "That link may have expired or already been used. Please request a new one."
-        );
       }
-    })();
-  }, []);
+    })
+    .catch((e) => {
+      console.log("consumeMagicLinkFromUrlIfPresent failed:", e?.message || e);
+      // optional: showMessage("Sign-in link failed", "That link may have expired. Request a new one.");
+    });
+}, []);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
@@ -1728,184 +1705,306 @@ function AdminEntrantsScreen({
 }
 
 function AuthScreen() {
+  const [mode, setMode] = useState("idle"); // "idle" | "login" | "signup"
+  const [username, setUsername] = useState("");
+  const [pin, setPin] = useState("");
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // ✅ NEW: send magic link
-const sendMagicLink = async () => {
-  if (!email) {
-    showMessage("Missing details", "Please enter your email address.");
-    return;
-  }
+  // Animation
+  const anim = useRef(new Animated.Value(0)).current; // 0 hidden, 1 shown
 
-  setBusy(true);
-  try {
-    // ✅ IMPORTANT: match your deployed region
-    const functions = getFunctions(undefined, "europe-west2");
-    const fn = httpsCallable(functions, "sendMagicLink");
+  const showForm = (nextMode) => {
+    setMode(nextMode);
+    Animated.timing(anim, {
+      toValue: 1,
+      duration: 220,
+      useNativeDriver: true,
+    }).start();
+  };
 
-    await fn({ email: email.trim() });
+  const hideForm = () => {
+    Animated.timing(anim, {
+      toValue: 0,
+      duration: 180,
+      useNativeDriver: true,
+    }).start(() => {
+      setMode("idle");
+      setPin("");
+    });
+  };
 
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem("emailForSignIn", email.trim());
+  const signUp = async () => {
+    if (!username || !pin) {
+      showMessage("Missing details", "Username and PIN are required.");
+      return;
     }
 
-    showMessage("Check your email", "We’ve sent you a sign-in link.");
-  } catch (e) {
-    console.log("call sendMagicLink failed:", e);
-    showMessage("Error", `${e?.code || "no-code"}\n${e?.message || "no-message"}`);
-  } finally {
-    setBusy(false);
-  }
-};
-
-
-  const register = async () => {
-    if (!email || !password) {
-      showMessage("Missing details", "Please enter an email and password.");
+    if (!/^\d{4,6}$/.test(String(pin))) {
+      showMessage("Invalid PIN", "PIN must be 4–6 digits.");
       return;
     }
 
     setBusy(true);
+
     try {
-      await createUserWithEmailAndPassword(auth, email.trim(), password);
+      console.log("SIGNUP ATTEMPT", { username, pin, email });
+
+      await signUpWithPin({
+        username: username.trim(),
+        pin: String(pin),
+        email: email.trim() || null,
+      });
+
+      console.log("SIGNUP SUCCESS");
+
       showMessage("Account created", "You are now logged in.");
     } catch (e) {
-      showMessage("Error", e.message);
+      console.log("SIGNUP ERROR", e);
+
+      const msg =
+        e?.details ||
+        e?.message ||
+        e?.code ||
+        JSON.stringify(e);
+
+      showMessage("Sign up failed", msg);
     } finally {
       setBusy(false);
     }
   };
 
   const login = async () => {
-    if (!email || !password) {
-      showMessage("Missing details", "Please enter an email and password.");
+    if (!username || !pin) {
+      showMessage("Missing details", "Enter username and PIN.");
       return;
     }
 
     setBusy(true);
-    try {
-      await signInWithEmailAndPassword(auth, email.trim(), password);
-} catch (e) {
-  console.log("sendMagicLink callable error:", e);
-  showMessage(
-    "Error sending link",
-    `${e?.code || "no-code"}\n${e?.message || "no-message"}`
-  );
-} finally {
-  setBusy(false);
-}
 
+    try {
+      console.log("LOGIN ATTEMPT", { username, pin });
+
+      const res = await loginWithPin({
+        username: username.trim(),
+        pin: String(pin),
+      });
+
+      console.log("LOGIN SUCCESS", res);
+    } catch (e) {
+      console.log("LOGIN ERROR", e);
+
+      const msg =
+        e?.details ||
+        e?.message ||
+        e?.code ||
+        JSON.stringify(e);
+
+      showMessage("Login failed", msg);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const sendMagicLink = async () => {
+    if (!username) {
+      showMessage("Missing username", "Enter your username first.");
+      return;
+    }
+
+    setBusy(true);
+
+    try {
+      console.log("MAGIC LINK REQUEST", { username });
+
+      const res = await requestMagicLink({
+        username: username.trim(),
+      });
+
+      console.log("MAGIC LINK RESPONSE", res);
+
+      showMessage(
+        "Check your email",
+        "If your account has an email saved, a magic login link has been sent."
+      );
+    } catch (e) {
+      console.log("MAGIC LINK ERROR", e);
+
+      const msg =
+        e?.details ||
+        e?.message ||
+        e?.code ||
+        JSON.stringify(e);
+
+      showMessage("Error", msg);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const formVisible = mode !== "idle";
+  const isSignup = mode === "signup";
+
+  // Animated styles
+  const formAnimatedStyle = {
+    opacity: anim,
+    transform: [
+      {
+        translateY: anim.interpolate({
+          inputRange: [0, 1],
+          outputRange: [10, 0],
+        }),
+      },
+    ],
   };
 
   return (
-    <View style={[styles.container, { paddingVertical: 0 }]}>
-      <ScrollView
-        style={{ width: "100%" }}
-        contentContainerStyle={styles.authScrollContent}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
-      >
-        <View style={[styles.content, { paddingTop: 16, paddingBottom: 16 }]}>
-          <View style={styles.heroWrap}>
-            <ImageBackground
-              source={HERO_IMAGE}
-              style={[styles.heroBg, styles.authHeroBg]}
-              imageStyle={styles.heroBgImage}
-              resizeMode="cover"
-            >
-              <View style={styles.heroOverlay}>
-                <View style={[styles.heroCard, styles.authCard]}>
-                  <View style={[styles.heroBadge, styles.authBadge]}>
-                    <Text style={styles.heroBadgeIcon}>🔐</Text>
-                  </View>
+    <View style={styles.authBg}>
+      <View style={styles.heroOverlay}>
+        <View style={styles.cardStack}>
+          <View style={styles.heroBadge}>
+            <Text style={styles.heroBadgeIcon}>🔒</Text>
+          </View>
 
-                  <Text style={styles.authTitle}>
-                    Thornton Cricket Club Cheltenham Tipping Competition
-                  </Text>
-                  <Text style={styles.authSubtitle}>
-                    Enter an email and password to register or log in to play
-                  </Text>
+          <View style={styles.heroCard}>
+            <Text style={styles.authTitle}>
+              Thornton Cricket Club Cheltenham{"\n"}Tipping Competition
+            </Text>
 
-                  <View style={styles.authForm}>
-                    <TextInput
-                      placeholder="Email"
-                      placeholderTextColor={THEME.text3}
-                      value={email}
-                      onChangeText={setEmail}
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      keyboardType="email-address"
-                      style={styles.input}
-                      editable={!busy}
-                    />
+            <Text style={styles.authSubtitle}>
+              Enter your username and PIN to register or log in to play
+            </Text>
 
-                    <TextInput
-                      placeholder="Password (6+ chars)"
-                      placeholderTextColor={THEME.text3}
-                      value={password}
-                      onChangeText={setPassword}
-                      secureTextEntry
-                      style={styles.input}
-                      editable={!busy}
-                    />
+            {/* FORM (animated) */}
+            {formVisible && (
+              <Animated.View style={[styles.authForm, formAnimatedStyle]}>
+                <TextInput
+                  placeholder="Username"
+                  value={username}
+                  onChangeText={setUsername}
+                  autoCapitalize="none"
+                  style={styles.input}
+                  editable={!busy}
+                />
 
-                    <Pressable
-                      style={[
-                        styles.button,
-                        styles.buttonPrimary,
-                        busy && styles.buttonDisabled,
-                      ]}
-                      onPress={login}
-                      disabled={busy}
-                    >
-                      <Text style={styles.buttonText}>
-                        {busy ? "Working…" : "Log In"}
-                      </Text>
-                    </Pressable>
+                <TextInput
+                  placeholder="PIN (4-6 digits)"
+                  value={pin}
+                  onChangeText={setPin}
+                  keyboardType="number-pad"
+                  secureTextEntry
+                  style={styles.input}
+                  editable={!busy}
+                />
 
-                    <Pressable
-                      style={[
-                        styles.button,
-                        styles.authSecondaryBtn,
-                        busy && styles.buttonDisabled,
-                      ]}
-                      onPress={register}
-                      disabled={busy}
-                    >
-                      <Text style={styles.buttonText}>
-                        {busy ? "Working…" : "Create Account"}
-                      </Text>
-                    </Pressable>
+                {isSignup && (
+                  <TextInput
+                    placeholder="Email (optional)"
+                    value={email}
+                    onChangeText={setEmail}
+                    autoCapitalize="none"
+                    keyboardType="email-address"
+                    style={styles.input}
+                    editable={!busy}
+                  />
+                )}
 
-                    {/* ✅ NEW BUTTON: uses same layout + styling */}
-                    <Pressable
-                      style={[
-                        styles.button,
-                        styles.authSecondaryBtn,
-                        busy && styles.buttonDisabled,
-                      ]}
-                      onPress={sendMagicLink}
-                      disabled={busy}
-                    >
-                      <Text style={styles.buttonText}>
-                        {busy ? "Working…" : "Sign in using email link (no password)"}
-                      </Text>
-                    </Pressable>
-
-                    <Text style={styles.authHint}>
-                      Any identifiable data collected during this competition will be securely stored and used solely for the purpose of managing the tipping competition. We will not share your information with third parties, and it will be deleted after the competition concludes. By participating, you consent to this data usage policy.
+                {mode === "login" ? (
+                  <Pressable
+                    style={[
+                      styles.button,
+                      styles.buttonPrimary,
+                      busy && styles.buttonDisabled,
+                    ]}
+                    onPress={login}
+                    disabled={busy}
+                  >
+                    <Text style={styles.buttonText}>
+                      {busy ? "Working…" : "Log In"}
                     </Text>
-                  </View>
-                </View>
+                  </Pressable>
+                ) : (
+                  <Pressable
+                    style={[
+                      styles.button,
+                      styles.buttonPrimary,
+                      busy && styles.buttonDisabled,
+                    ]}
+                    onPress={signUp}
+                    disabled={busy}
+                  >
+                    <Text style={styles.buttonText}>
+                      {busy ? "Working…" : "Create Account"}
+                    </Text>
+                  </Pressable>
+                )}
+
+                <Pressable
+                  style={[styles.button, styles.authSecondaryBtn]}
+                  onPress={hideForm}
+                  disabled={busy}
+                >
+                  <Text style={styles.buttonText}>Back</Text>
+                </Pressable>
+              </Animated.View>
+            )}
+
+            {mode === "idle" && (
+              <View style={styles.authForm}>
+                <Pressable
+                  style={[styles.button, styles.buttonPrimary]}
+                  onPress={() => showForm("login")}
+                  disabled={busy}
+                >
+                  <Text style={styles.buttonText}>Log In</Text>
+                </Pressable>
+
+                <Pressable
+                  style={[styles.button, styles.authSecondaryBtn]}
+                  onPress={() => showForm("signup")}
+                  disabled={busy}
+                >
+                  <Text style={styles.buttonText}>Create Account</Text>
+                </Pressable>
+
+                <Pressable
+                  style={[styles.button, styles.authSecondaryBtn]}
+                  onPress={() => showForm("login")}
+                  disabled={busy}
+                >
+                  <Text style={styles.buttonText}>
+                    Sign in using email link (no password)
+                  </Text>
+                </Pressable>
               </View>
-            </ImageBackground>
+            )}
+
+            {mode === "login" && (
+              <Pressable
+                style={[
+                  styles.button,
+                  styles.authSecondaryBtn,
+                  busy && styles.buttonDisabled,
+                ]}
+                onPress={sendMagicLink}
+                disabled={busy}
+              >
+                <Text style={styles.buttonText}>
+                  Sign in using email link (no password)
+                </Text>
+              </Pressable>
+            )}
+
+            <Text style={styles.authHint}>
+              Any identifiable data collected during this competition will be
+              securely stored and used solely for the purpose of managing the
+              tipping competition. We will not share your information with third
+              parties, and it will be deleted after the competition concludes.
+              By participating, you consent to this data usage policy.
+            </Text>
           </View>
         </View>
-      </ScrollView>
-
-      <StatusBar style="auto" />
+      </View>
     </View>
   );
 }
@@ -2059,11 +2158,22 @@ function HomeScreen({
         contentContainerStyle={{ paddingBottom: FOOTER_HEIGHT + 24 }}
         showsVerticalScrollIndicator={false}
       >
-        {/* PWA install prompt */}
-        <InstallBanner />
 
         {/* Hero banner */}
-        <View style={[styles.heroWrap, { renderToHardwareTextureAndroid: true }]}>
+        <View
+  style={[
+    styles.heroWrap,
+    {
+      width: contentWidth,
+      alignSelf: "center",
+      overflow: "hidden",
+      renderToHardwareTextureAndroid: true,
+
+      // ✅ allow the hero to grow with the card
+      minHeight: Math.max(320, Math.round(contentWidth * 0.75)),
+    },
+  ]}
+>
           <ImageBackground
             // TODO: replace this with your provided hero image (local require or remote uri)
             source={HERO_IMAGE}
@@ -2071,7 +2181,7 @@ function HomeScreen({
             imageStyle={styles.heroBgImage}
             resizeMode="cover"
           >
-            <View style={styles.heroOverlay}>
+            <View style={[styles.heroOverlay, { paddingBottom: 110 }]}>
               <View style={styles.heroCard}>
                 <View style={styles.heroBadge}>
                   <Text style={styles.heroBadgeIcon}>🏆</Text>
@@ -4480,671 +4590,682 @@ const SHADOW = Platform.select({
 });
 
 const styles = StyleSheet.create({
-container: {
-  flex: 1,
-  backgroundColor: THEME.bg,
-  alignItems: "center",
-  justifyContent: "flex-start",
-  paddingVertical: 16, // slightly tighter in light UI
-},
+  container: {
+    flex: 1,
+    backgroundColor: THEME.bg,
+    alignItems: "center",
+    justifyContent: "flex-start",
+    paddingVertical: 16, // slightly tighter in light UI
+  },
 
-content: {
-  width: "100%",
-  maxWidth: 520,
-  paddingHorizontal: 16,
-},
+  content: {
+    width: "100%",
+    maxWidth: 520,
+    paddingHorizontal: 16,
+  },
 
-topBar: {
-  width: "100%",
-  backgroundColor: "rgba(255,255,255,0.92)",
-  paddingVertical: 10,
-  borderBottomWidth: 1,
-  borderBottomColor: THEME.border,
-},
+  topBar: {
+    width: "100%",
+    backgroundColor: "rgba(255,255,255,0.92)",
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: THEME.border,
+  },
 
-footerBar: {
-  position: "absolute",
-  left: 0,
-  right: 0,
-  bottom: 0,
-  height: FOOTER_HEIGHT,
-  backgroundColor: "rgba(255,255,255,0.94)",
-  borderTopWidth: 1,
-  borderTopColor: THEME.border,
-},
+  footerBar: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: FOOTER_HEIGHT,
+    backgroundColor: "rgba(255,255,255,0.94)",
+    borderTopWidth: 1,
+    borderTopColor: THEME.border,
+  },
 
-// Footer is "double the width" of header inner (520 -> 1040)
-footerInner: {
-  width: "100%",
-  maxWidth: 520,        // ✅ match content + header
-  alignSelf: "center",
-  height: "100%",
-  flexDirection: "row",
-  alignItems: "center",
-  justifyContent: "space-evenly",
-paddingHorizontal: 6,
-},
+  // Footer is "double the width" of header inner (520 -> 1040)
+  footerInner: {
+    width: "100%",
+    maxWidth: 520, // ✅ match content + header
+    alignSelf: "center",
+    height: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-evenly",
+    paddingHorizontal: 6,
+  },
 
-footerBtn: {
-  flex: 1,
-  flexBasis: 0,          // ✅ ensures equal widths on all devices
-  minWidth: 0,
-  alignItems: "center",
-  justifyContent: "center",
-  paddingVertical: 8,    // ✅ reduces height pressure
-  paddingHorizontal: 2,  // ✅ prevents text from touching edges
-  borderRadius: 14,
-},
+  footerBtn: {
+    flex: 1,
+    flexBasis: 0, // ✅ ensures equal widths on all devices
+    minWidth: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 8, // ✅ reduces height pressure
+    paddingHorizontal: 2, // ✅ prevents text from touching edges
+    borderRadius: 14,
+  },
 
-footerBtnActive: {
-  backgroundColor: "rgba(244,162,97,0.25)", // THEME.primary with alpha
-  borderWidth: 1,
-  borderColor: "rgba(244,162,97,0.35)",
-},
+  footerBtnActive: {
+    backgroundColor: "rgba(244,162,97,0.25)", // THEME.primary with alpha
+    borderWidth: 1,
+    borderColor: "rgba(244,162,97,0.35)",
+  },
 
-footerIcon: {
-  fontSize: 18,
-},
+  footerIcon: {
+    fontSize: 18,
+  },
 
-footerText: {
-  marginTop: 3,
-  fontSize: 11,        // ✅ helps "Leaderboard" fit
-  fontWeight: "900",
-  color: THEME.text,
-  textAlign: "center", // ✅ better when squeezed
-},
+  footerText: {
+    marginTop: 3,
+    fontSize: 11, // ✅ helps "Leaderboard" fit
+    fontWeight: "900",
+    color: THEME.text,
+    textAlign: "center", // ✅ better when squeezed
+  },
 
-footerTextActive: {
-  textDecorationLine: "underline",
-},
+  footerTextActive: {
+    textDecorationLine: "underline",
+  },
 
-topBarInner: {
-  width: "100%",
-  maxWidth: 520,
-  paddingHorizontal: 16,
-  alignSelf: "center",
-  flexDirection: "row",
-  justifyContent: "space-between",
-  alignItems: "center",
-},
+  topBarInner: {
+    width: "100%",
+    maxWidth: 520,
+    paddingHorizontal: 16,
+    alignSelf: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
 
-topBarBtn: {
-  paddingVertical: 6,
-  paddingHorizontal: 10,
-  borderRadius: 12,
-  backgroundColor: "rgba(255,255,255,0.45)",
-  borderWidth: 1,
-  borderColor: "rgba(0,0,0,0.10)",
-},
+  topBarBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.45)",
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.10)",
+  },
 
-topBarBtnText: {
-  fontSize: 14,
-  fontWeight: "800",
-  color: "#111",
-},
+  topBarBtnText: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#111",
+  },
 
-topBarProfileIcon: {
-  fontSize: 16,
-  fontWeight: "800",
-  color: "#111",
-},
+  topBarProfileIcon: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#111",
+  },
 
-title: {
-  fontSize: 26,
-  fontWeight: "800",
-  marginBottom: 6,
-  textAlign: "center",
-  paddingHorizontal: 66,
-  color: THEME.text,
-},
+  title: {
+    fontSize: 26,
+    fontWeight: "800",
+    marginBottom: 6,
+    textAlign: "center",
+    paddingHorizontal: 66,
+    color: THEME.text,
+  },
 
-subtitle: {
-  fontSize: 16,
-  marginBottom: 12,
-  textAlign: "center",
-  paddingHorizontal: 56,
-  color: THEME.text2,
-},
+  subtitle: {
+    fontSize: 16,
+    marginBottom: 12,
+    textAlign: "center",
+    paddingHorizontal: 56,
+    color: THEME.text2,
+  },
 
   sectionTitle: {
-  fontSize: 16,
-  fontWeight: "800",
-  marginTop: 10,
-  color: THEME.text,
-},
+    fontSize: 16,
+    fontWeight: "800",
+    marginTop: 10,
+    color: THEME.text,
+  },
+
   statsRow: { flexDirection: "row", gap: 10, marginBottom: 14 },
 
-statCard: {
-  flex: 1,
-  backgroundColor: THEME.surface,
-  borderRadius: THEME.r16,
-  padding: 14,
-  alignItems: "center",
-  borderWidth: 1,
-  borderColor: THEME.border,
-},
-statNumber: { fontSize: 22, fontWeight: "900", color: THEME.text },
-statLabel: { marginTop: 4, color: THEME.text3 },
+  statCard: {
+    flex: 1,
+    backgroundColor: THEME.surface,
+    borderRadius: THEME.r16,
+    padding: 14,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: THEME.border,
+  },
+  statNumber: { fontSize: 22, fontWeight: "900", color: THEME.text },
+  statLabel: { marginTop: 4, color: THEME.text3 },
 
-carouselWrap: {
-  marginTop: 2,
-  marginBottom: 14,
-},
+  carouselWrap: {
+    marginTop: 2,
+    marginBottom: 14,
+  },
 
-carouselSlide: {
-  backgroundColor: THEME.surface,
-  borderRadius: THEME.r16,
-  padding: 16,
-  borderWidth: 1,
-  borderColor: THEME.border,
-},
+  carouselSlide: {
+    backgroundColor: THEME.surface,
+    borderRadius: THEME.r16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: THEME.border,
+  },
 
-carouselKicker: {
-  fontSize: 12,
-  fontWeight: "800",
-  color: THEME.text3,
-  marginBottom: 6,
-},
+  carouselKicker: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: THEME.text3,
+    marginBottom: 6,
+  },
 
-carouselTitle: {
-  fontSize: 16,
-  fontWeight: "900",
-  color: THEME.text,
-  marginBottom: 6,
-},
+  carouselTitle: {
+    fontSize: 16,
+    fontWeight: "900",
+    color: THEME.text,
+    marginBottom: 6,
+  },
 
-carouselBody: {
-  color: THEME.text2,
-  marginTop: 2,
-},
+  carouselBody: {
+    color: THEME.text2,
+    marginTop: 2,
+  },
 
-carouselDots: {
-  flexDirection: "row",
-  justifyContent: "center",
-  gap: 8,
-  marginTop: 8,
-},
+  carouselDots: {
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: 8,
+    marginTop: 8,
+  },
 
-carouselDot: {
-  width: 8,
-  height: 8,
-  borderRadius: 999,
-  backgroundColor: "rgba(17,24,39,0.18)",
-},
+  carouselDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: "rgba(17,24,39,0.18)",
+  },
 
-carouselDotActive: {
-  backgroundColor: "rgba(17,24,39,0.45)",
-},
+  carouselDotActive: {
+    backgroundColor: "rgba(17,24,39,0.45)",
+  },
 
-htmlCard: {
-  marginBottom: 14,
-},
+  htmlCard: {
+    marginBottom: 14,
+  },
 
-htmlHeaderRow: {
-  flexDirection: "row",
-  justifyContent: "space-between",
-  alignItems: "center",
-  marginBottom: 8,
-},
+  htmlHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
 
-htmlInput: {
-  borderWidth: 1,
-  borderColor: THEME.border,
-  backgroundColor: "rgba(17,24,39,0.03)",
-  borderRadius: 14,
-  padding: 12,
-  minHeight: 120,
-  color: THEME.text,
-  textAlignVertical: "top",
-},
+  htmlInput: {
+    borderWidth: 1,
+    borderColor: THEME.border,
+    backgroundColor: "rgba(17,24,39,0.03)",
+    borderRadius: 14,
+    padding: 12,
+    minHeight: 120,
+    color: THEME.text,
+    textAlignVertical: "top",
+  },
 
   input: {
-  borderWidth: 1,
-  borderColor: THEME.border,
-  backgroundColor: "rgba(17,24,39,0.03)",
-  borderRadius: 14,
-  padding: 12,
-  marginBottom: 10,
-  color: THEME.text,
-},
+    borderWidth: 1,
+    borderColor: THEME.border,
+    backgroundColor: "rgba(17,24,39,0.03)",
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 10,
+    color: THEME.text,
+  },
 
-button: {
-  borderRadius: THEME.r16,
-  paddingVertical: 12,
-  paddingHorizontal: 16,
-  alignItems: "center",
-  marginBottom: 10,
-  backgroundColor: THEME.surface,
-  borderWidth: 1,
-  borderColor: THEME.border,
-},
+  button: {
+    borderRadius: THEME.r16,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    alignItems: "center",
+    marginBottom: 10,
+    backgroundColor: THEME.surface,
+    borderWidth: 1,
+    borderColor: THEME.border,
+  },
 
-buttonPrimary: {
-  backgroundColor: THEME.primary,   // pastel orange
-  borderColor: "rgba(0,0,0,0.06)",
-},
+  buttonPrimary: {
+    backgroundColor: THEME.primary, // pastel orange
+    borderColor: "rgba(0,0,0,0.06)",
+  },
 
-buttonGhost: {
-  backgroundColor: "rgba(255,255,255,0.04)",
-  borderColor: "rgba(255,255,255,0.10)",
-},
+  buttonGhost: {
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderColor: "rgba(255,255,255,0.10)",
+  },
 
-buttonDanger: {
-  backgroundColor: "rgba(239,68,68,0.18)",
-  borderColor: "rgba(239,68,68,0.35)",
-},
+  buttonDanger: {
+    backgroundColor: "rgba(239,68,68,0.18)",
+    borderColor: "rgba(239,68,68,0.35)",
+  },
 
   adminButton: { marginTop: 6 },
 
-smallButton: {
-  alignSelf: "flex-start",
-  paddingVertical: 8,
-  paddingHorizontal: 12,
-  borderRadius: 14,
-},
+  smallButton: {
+    alignSelf: "flex-start",
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+  },
 
- buttonDisabled: {
-  opacity: 0.45,
-},
+  buttonDisabled: {
+    opacity: 0.45,
+  },
 
-buttonText: {
-  fontSize: 16,
-  fontWeight: "800",
-  color: THEME.text,
-},
+  buttonText: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: THEME.text,
+  },
 
   card: {
-  backgroundColor: THEME.surface,
+    backgroundColor: THEME.surface,
+    borderRadius: THEME.r16,
+    padding: 14,
+    marginBottom: 10,
+
+    // depth
+    shadowColor: "#000",
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 6,
+  },
+
+  // optional: slightly different surface for nested cards (Results screen uses nested cards)
+  cardAlt: {
+    backgroundColor: THEME.surface2,
+  },
+
+  heroWrap: {
+  marginTop: 8,
+  marginBottom: 14,
   borderRadius: THEME.r16,
-  padding: 14,
-  marginBottom: 10,
-
-  // depth
-  shadowColor: "#000",
-  shadowOpacity: 0.35,
-  shadowRadius: 12,
-  shadowOffset: { width: 0, height: 6 },
-  elevation: 6,
-},
-
-// optional: slightly different surface for nested cards (Results screen uses nested cards)
-cardAlt: {
-  backgroundColor: THEME.surface2,
-},
-
-heroWrap: {
-  marginBottom: 10,
-  borderRadius: THEME.r16,
-  overflow: "hidden",
+  overflow: "hidden", // ✅ clip to rounded corners (like screenshot)
 },
 heroBg: {
   width: "100%",
-  height: 420,
-  justifyContent: "center",
+  // ❌ no height: "100%"
+  // ❌ no minHeight: "100vh"
 },
-heroBgImage: {
-  transform: [{ scale: 1.02 }],
-},
-heroOverlay: {
-  flex: 1,
-  justifyContent: "center",
-  alignItems: "center",
+
+  heroBgImage: {
+    transform: [{ scale: 1.02 }],
+  },
+
+  heroOverlay: {
+  paddingTop: 26,
   paddingHorizontal: 16,
-  paddingVertical: 18,
-  backgroundColor: "rgba(0,0,0,0.28)",
+  paddingBottom: 100,  // ✅ this makes the hero image extend downward
+  alignItems: "center",
 },
-heroCard: {
+
+  heroCard: {
   width: "100%",
   maxWidth: 440,
-  backgroundColor: "#FFFFFF",
-  borderRadius: 14,
+  backgroundColor: "rgba(255,255,255,0.92)",
+  borderRadius: 16,
   paddingTop: 28,
-  paddingHorizontal: 16,
-  paddingBottom: 14,
+  paddingHorizontal: 18,
+  paddingBottom: 16,
   alignItems: "center",
 },
-heroBadge: {
-  position: "absolute",
-  top: -18,
-  width: 36,
-  height: 36,
-  borderRadius: 18,
-  backgroundColor: "#0f6b4f",
+  heroBadge: {
+  width: 40,
+  height: 40,
+  borderRadius: 999,
+  backgroundColor: "#0F6B4F",
   alignItems: "center",
   justifyContent: "center",
-},
-heroBadgeIcon: {
-  fontSize: 16,
-  color: "#fff",
-},
-heroKicker: {
-  fontSize: 12,
-  letterSpacing: 0.6,
-  color: "#111",
-  opacity: 0.9,
-  textAlign: "center",
-  marginBottom: 4,
-},
-heroHeadline: {
-  fontSize: 36,
-  fontWeight: "900",
-  color: "#f59f00",
-  textAlign: "center",
-  marginBottom: 6,
-},
-heroSub: {
-  fontSize: 13,
-  color: "#111",
-  opacity: 0.85,
-  textAlign: "center",
-  marginBottom: 12,
-},
-heroCta: {
-  alignSelf: "stretch",
-  justifyContent: "center",
-  alignItems: "center",
-  paddingVertical: 12,
-  borderRadius: 14,
-  backgroundColor: "#0f6b4f",
-  borderWidth: 1,
-  borderColor: "rgba(0,0,0,0.10)",
-  overflow: "hidden",
-
-  // depth
-  shadowColor: "#000",
-  shadowOpacity: 0.22,
-  shadowRadius: 10,
-  shadowOffset: { width: 0, height: 6 },
-  elevation: 6,
-},
-heroCtaText: {
-  fontSize: 14,
-  fontWeight: "900",
-  letterSpacing: 0.8,
-  color: "#fff",
-},
-heroCtaSheen: {
   position: "absolute",
-  top: -20,
-  bottom: -20,
-  width: 60,
-  backgroundColor: "rgba(255,255,255,0.28)",
+  top: -20, // ✅ sits above the card like screenshot
 },
+  heroBadgeIcon: {
+    fontSize: 16,
+    color: "#fff",
+  },
+  heroKicker: {
+    fontSize: 12,
+    letterSpacing: 0.6,
+    color: "#111",
+    opacity: 0.9,
+    textAlign: "center",
+    marginBottom: 4,
+  },
+  heroHeadline: {
+    fontSize: 36,
+    fontWeight: "900",
+    color: "#f59f00",
+    textAlign: "center",
+    marginBottom: 6,
+  },
+  heroSub: {
+    fontSize: 13,
+    color: "#111",
+    opacity: 0.85,
+    textAlign: "center",
+    marginBottom: 12,
+  },
+  heroCta: {
+    alignSelf: "stretch",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingVertical: 12,
+    borderRadius: 14,
+    backgroundColor: "#0f6b4f",
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.10)",
+    overflow: "hidden",
 
-cardActive: {
-  // selected = slightly brighter border + extra depth
-  borderWidth: 1,
-  borderColor: "rgba(59,130,246,0.55)",
-  shadowOpacity: 0.5,
-  shadowRadius: 16,
-  elevation: 8,
-},
+    // depth
+    shadowColor: "#000",
+    shadowOpacity: 0.22,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 6,
+  },
+  heroCtaText: {
+    fontSize: 14,
+    fontWeight: "900",
+    letterSpacing: 0.8,
+    color: "#fff",
+  },
+  heroCtaSheen: {
+    position: "absolute",
+    top: -20,
+    bottom: -20,
+    width: 60,
+    backgroundColor: "rgba(255,255,255,0.28)",
+  },
+
+  cardActive: {
+    // selected = slightly brighter border + extra depth
+    borderWidth: 1,
+    borderColor: "rgba(59,130,246,0.55)",
+    shadowOpacity: 0.5,
+    shadowRadius: 16,
+    elevation: 8,
+  },
 
   meSummaryCard: {
-  borderWidth: 1,
-  borderColor: "rgba(255,255,255,0.10)",
-},
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+  },
 
-leaderboardMe: {
-  borderWidth: 1,
-  borderColor: "rgba(59,130,246,0.55)",
-  backgroundColor: "rgba(59,130,246,0.12)",
-},
+  leaderboardMe: {
+    borderWidth: 1,
+    borderColor: "rgba(59,130,246,0.55)",
+    backgroundColor: "rgba(59,130,246,0.12)",
+  },
 
   cardTitle: {
-  fontSize: 16,
-  fontWeight: "800",
-  color: THEME.text,
-},
+    fontSize: 16,
+    fontWeight: "800",
+    color: THEME.text,
+  },
 
   cardSubtitle: {
-  marginTop: 4,
-  color: THEME.text2,
-},
+    marginTop: 4,
+    color: THEME.text2,
+  },
 
   cardHint: {
-  marginTop: 6,
-  color: THEME.text3,
-  fontSize: 12,
-},
-smallChoice: {
-  backgroundColor: "rgba(255,255,255,0.05)",
-  borderWidth: 1,
-  borderColor: "rgba(255,255,255,0.10)",
-  borderRadius: 14,
-  paddingVertical: 10,
-  paddingHorizontal: 12,
-  alignItems: "center",
-  justifyContent: "center",
-},
-smallChoiceText: { fontSize: 14, fontWeight: "800", color: THEME.text, textAlign: "center" },
+    marginTop: 6,
+    color: THEME.text3,
+    fontSize: 12,
+  },
+
+  smallChoice: {
+    backgroundColor: "rgba(255,255,255,0.05)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  smallChoiceText: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: THEME.text,
+    textAlign: "center",
+  },
+
   cardSection: { marginTop: 12 },
-raceSelectorRow: {
-  flexDirection: "row",
-  width: "100%",
-  gap: 8,                 // spacing between buttons
-  marginVertical: 10,
-},
 
-raceSelectorBtn: {
-  flex: 1,
-  marginHorizontal: 4,
-  height: 44,
-  borderRadius: 14,
-  justifyContent: "center",
-  alignItems: "center",
-  backgroundColor: "rgba(255,255,255,0.05)",
-  borderWidth: 1,
-  borderColor: "rgba(255,255,255,0.10)",
-},
+  raceSelectorRow: {
+    flexDirection: "row",
+    width: "100%",
+    gap: 8, // spacing between buttons
+    marginVertical: 10,
+  },
 
-raceSelectorBtnActive: {
-  backgroundColor: "rgba(59,130,246,0.20)",
-  borderColor: "rgba(59,130,246,0.55)",
-},
+  raceSelectorBtn: {
+    flex: 1,
+    marginHorizontal: 4,
+    height: 44,
+    borderRadius: 14,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.05)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+  },
 
-raceSelectorBtnTipped: {
-  backgroundColor: "rgba(34,197,94,0.22)",
-  borderColor: "rgba(34,197,94,0.60)",
-},
+  raceSelectorBtnActive: {
+    backgroundColor: "rgba(59,130,246,0.20)",
+    borderColor: "rgba(59,130,246,0.55)",
+  },
 
+  raceSelectorBtnTipped: {
+    backgroundColor: "rgba(34,197,94,0.22)",
+    borderColor: "rgba(34,197,94,0.60)",
+  },
 
-raceSelectorText: { fontSize: 16, fontWeight: "800", color: THEME.text2 },
+  raceSelectorText: { fontSize: 16, fontWeight: "800", color: THEME.text2 },
 
-raceSelectorTextActive: { color: THEME.text, fontWeight: "900" },
-raceSelectorTextTipped: { color: THEME.text, fontWeight: "900" },
+  raceSelectorTextActive: { color: THEME.text, fontWeight: "900" },
+  raceSelectorTextTipped: { color: THEME.text, fontWeight: "900" },
 
+  grid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+    marginTop: 16,
+    alignContent: "flex-start",
+  },
 
-grid: {
-  flexDirection: "row",
-  flexWrap: "wrap",
-  justifyContent: "space-between",
-  marginTop: 16,
-  alignContent: "flex-start",
-},
+  adminWideButton: {
+    width: "100%",
+    borderRadius: THEME.r16,
+    paddingVertical: 12,
+    alignItems: "center",
+    marginBottom: 12,
+    backgroundColor: "rgba(17,24,39,0.03)",
+    borderWidth: 1,
+    borderColor: THEME.border,
+  },
 
-adminWideButton: {
-  width: "100%",
-  borderRadius: THEME.r16,
-  paddingVertical: 12,
-  alignItems: "center",
-  marginBottom: 12,
-  backgroundColor: "rgba(17,24,39,0.03)",
-  borderWidth: 1,
-  borderColor: THEME.border,
-},
+  adminWideButtonText: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: THEME.text,
+  },
 
-adminWideButtonText: {
-  fontSize: 16,
-  fontWeight: "800",
-  color: THEME.text,
-},
+  profileCornerButton: {
+    position: "absolute",
+    top: 12,
+    padding: 10,
+    borderRadius: 999,
+    zIndex: 9999,
+    elevation: 10,
 
-profileCornerButton: {
-  position: "absolute",
-  top: 12,
-  padding: 10,
-  borderRadius: 999,
-  zIndex: 9999,
-  elevation: 10,
+    backgroundColor: THEME.surface,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
 
-  backgroundColor: THEME.surface,
-  borderWidth: 1,
-  borderColor: "rgba(255,255,255,0.12)",
+    shadowColor: "#000",
+    shadowOpacity: 0.45,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 7 },
+  },
+  profileCornerButtonText: {
+    color: THEME.text,
+    fontSize: 16,
+    fontWeight: "800",
+  },
 
-  shadowColor: "#000",
-  shadowOpacity: 0.45,
-  shadowRadius: 14,
-  shadowOffset: { width: 0, height: 7 },
-},
-profileCornerButtonText: {
-  color: THEME.text,
-  fontSize: 16,
-  fontWeight: "800",
-},
-
-authScrollContent: {
+  authScrollContent: {
   flexGrow: 1,
-  alignItems: "center",
   justifyContent: "center",
-},
-
-authHeroBg: {
-  height: 560, // tweak if you want taller/shorter on login
-},
-
-authCard: {
-  // slightly roomier inset for inputs
-  paddingBottom: 16,
-},
-
-authBadge: {
-  backgroundColor: THEME.primary,
-},
-
-authTitle: {
-  fontSize: 22,
-  fontWeight: "900",
-  color: THEME.text,
-  textAlign: "center",
-  marginBottom: 6,
-},
-
-authSubtitle: {
-  fontSize: 14,
-  color: THEME.text2,
-  textAlign: "center",
-  marginBottom: 12,
-},
-
-authForm: {
-  alignSelf: "stretch",
-  marginTop: 6,
-},
-
-authSecondaryBtn: {
-  backgroundColor: "rgba(17,24,39,0.06)",
-  borderColor: "rgba(17,24,39,0.10)",
-},
-
-authHint: {
-  marginTop: 6,
-  fontSize: 12,
-  color: THEME.text3,
-  textAlign: "center",
-},
-
-topBarAdminBtn: {
-  backgroundColor: "rgba(244,162,97,0.25)", // theme primary tint
-  borderColor: "rgba(244,162,97,0.45)",
-},
-
-topBarAdminText: {
-  fontSize: 13,
-  fontWeight: "900",
-  letterSpacing: 1,
-  color: THEME.text,
-},
-
-leaderRow: {
-  flexDirection: "row",
   alignItems: "center",
-  justifyContent: "space-between",
-  paddingVertical: 14,
 },
 
-leaderCenter: {
+  authHeroBg: {
   flex: 1,
-  flexDirection: "row",
-  alignItems: "center",
-  justifyContent: "center",
-  gap: 8,
-  paddingHorizontal: 10,
-},
-leaderTrophy: {
-  fontSize: 16,
+  minHeight: "100vh",      // ✅ web full height
+  width: "100%",
 },
 
-leaderName: {
-  fontSize: 16,
-  fontWeight: "900",
-  color: THEME.text,
-  textAlign: "center",
-},
+  authCard: {
+    // slightly roomier inset for inputs
+    paddingBottom: 16,
+  },
 
-leaderInsetLeft: {
-  minWidth: 38,
-  paddingVertical: 8,
-  paddingHorizontal: 10,
-  borderRadius: 12,
-  backgroundColor: "rgba(17,24,39,0.06)",
-  borderWidth: 1,
-  borderColor: "rgba(17,24,39,0.08)",
-  alignItems: "center",
-},
+  authBadge: {
+    backgroundColor: THEME.primary,
+  },
 
-leaderInsetRight: {
-  minWidth: 52,
-  paddingVertical: 8,
-  paddingHorizontal: 10,
-  borderRadius: 12,
-  backgroundColor: "rgba(17,24,39,0.06)",
-  borderWidth: 1,
-  borderColor: "rgba(17,24,39,0.08)",
-  alignItems: "center",
-},
+  authTitle: {
+    fontSize: 22,
+    fontWeight: "900",
+    color: THEME.text,
+    textAlign: "center",
+    marginBottom: 6,
+  },
 
-leaderInsetText: {
-  fontSize: 12,
-  fontWeight: "900",
-  color: THEME.text,
-},
+  authSubtitle: {
+    fontSize: 14,
+    color: THEME.text2,
+    textAlign: "center",
+    marginBottom: 12,
+  },
 
-/** #1 SPECIAL EFFECT **/
-leaderboardTop: {
-  borderWidth: 1,
-  borderColor: "rgba(245,159,0,0.55)",
-  backgroundColor: "rgba(245,159,0,0.10)",
-  shadowColor: "#000",
-  shadowOpacity: 0.18,
-  shadowRadius: 14,
-  shadowOffset: { width: 0, height: 8 },
-  elevation: 7,
-},
+  authForm: {
+    alignSelf: "stretch",
+    marginTop: 6,
+  },
 
-leaderInsetTop: {
-  backgroundColor: "rgba(245,159,0,0.14)",
-  borderColor: "rgba(245,159,0,0.45)",
-},
+  authSecondaryBtn: {
+    backgroundColor: "rgba(17,24,39,0.06)",
+    borderColor: "rgba(17,24,39,0.10)",
+  },
 
-leaderInsetTextTop: {
-  color: "#b45309", // warm gold/brown
-},
+  authHint: {
+    marginTop: 6,
+    fontSize: 12,
+    color: THEME.text3,
+    textAlign: "center",
+  },
 
-leaderNameTop: {
-  color: "#b45309",
-},
+  topBarAdminBtn: {
+    backgroundColor: "rgba(244,162,97,0.25)", // theme primary tint
+    borderColor: "rgba(244,162,97,0.45)",
+  },
 
+  topBarAdminText: {
+    fontSize: 13,
+    fontWeight: "900",
+    letterSpacing: 1,
+    color: THEME.text,
+  },
+
+  leaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 14,
+  },
+
+  leaderCenter: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingHorizontal: 10,
+  },
+  leaderTrophy: {
+    fontSize: 16,
+  },
+
+  leaderName: {
+    fontSize: 16,
+    fontWeight: "900",
+    color: THEME.text,
+    textAlign: "center",
+  },
+
+  leaderInsetLeft: {
+    minWidth: 38,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    backgroundColor: "rgba(17,24,39,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(17,24,39,0.08)",
+    alignItems: "center",
+  },
+
+  leaderInsetRight: {
+    minWidth: 52,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    backgroundColor: "rgba(17,24,39,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(17,24,39,0.08)",
+    alignItems: "center",
+  },
+
+  leaderInsetText: {
+    fontSize: 12,
+    fontWeight: "900",
+    color: THEME.text,
+  },
+
+  /** #1 SPECIAL EFFECT **/
+  leaderboardTop: {
+    borderWidth: 1,
+    borderColor: "rgba(245,159,0,0.55)",
+    backgroundColor: "rgba(245,159,0,0.10)",
+    shadowColor: "#000",
+    shadowOpacity: 0.18,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 7,
+  },
+
+  leaderInsetTop: {
+    backgroundColor: "rgba(245,159,0,0.14)",
+    borderColor: "rgba(245,159,0,0.45)",
+  },
+
+  leaderInsetTextTop: {
+    color: "#b45309", // warm gold/brown
+  },
+
+  leaderNameTop: {
+    color: "#b45309",
+  },
 
   // Upcoming Races: expandable runners
   raceCardHeaderRow: {
@@ -5168,31 +5289,32 @@ leaderNameTop: {
     fontWeight: "900",
     color: THEME.text,
   },
+
   sortRow: {
-  flexDirection: "row",
-  gap: 10,
-  marginTop: 10,
-},
-sortPill: {
-  flex: 1,
-  paddingVertical: 10,
-  borderRadius: 999,
-  alignItems: "center",
-  backgroundColor: "rgba(17,24,39,0.06)",
-  borderWidth: 1,
-  borderColor: "rgba(17,24,39,0.08)",
-},
-sortPillActive: {
-  backgroundColor: "rgba(17,24,39,0.12)",
-},
-sortPillText: {
-  fontSize: 12,
-  fontWeight: "800",
-  color: THEME.text2,
-},
-sortPillTextActive: {
-  color: THEME.text,
-},
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 10,
+  },
+  sortPill: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 999,
+    alignItems: "center",
+    backgroundColor: "rgba(17,24,39,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(17,24,39,0.08)",
+  },
+  sortPillActive: {
+    backgroundColor: "rgba(17,24,39,0.12)",
+  },
+  sortPillText: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: THEME.text2,
+  },
+  sortPillTextActive: {
+    color: THEME.text,
+  },
 
   runnerCard: {
     paddingVertical: 12,
@@ -5235,38 +5357,36 @@ sortPillTextActive: {
     color: THEME.text,
   },
 
-tipUserRow: {
-  flexDirection: "row",
-  justifyContent: "space-between",
-  alignItems: "center",
-  paddingVertical: 8,
-  paddingHorizontal: 10,
-  borderRadius: 10,
-  borderWidth: 1,
-  borderColor: "rgba(0,0,0,0.06)",
-},
+  tipUserRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.06)",
+  },
 
-tipUserRowMissing: {
-  borderColor: "rgba(220, 38, 38, 0.35)",
-  backgroundColor: "rgba(220, 38, 38, 0.06)",
-},
+  tipUserRowMissing: {
+    borderColor: "rgba(220, 38, 38, 0.35)",
+    backgroundColor: "rgba(220, 38, 38, 0.06)",
+  },
 
-tipUserName: {
-  flex: 1,
-  marginRight: 10,
-  fontWeight: "700",
-},
+  tipUserName: {
+    flex: 1,
+    marginRight: 10,
+    fontWeight: "700",
+  },
 
-tipUserPick: {
-  flexShrink: 1,
-  fontWeight: "600",
-},
+  tipUserPick: {
+    flexShrink: 1,
+    fontWeight: "600",
+  },
 
-tipUserPickMissing: {
-  fontWeight: "700",
-},
-
-
+  tipUserPickMissing: {
+    fontWeight: "700",
+  },
 
   // Admin competitions UI
   rowButton: {
@@ -5330,542 +5450,750 @@ tipUserPickMissing: {
     backgroundColor: "rgba(244,162,97,0.20)",
   },
 
-adminError: {
-  backgroundColor: "rgba(239,68,68,0.12)",
-  borderWidth: 1,
-  borderColor: "rgba(239,68,68,0.35)",
-  padding: 12,
-  borderRadius: 12,
-  color: THEME.text,
-  fontWeight: "800",
-  marginTop: 10,
-},
+  adminError: {
+    backgroundColor: "rgba(239,68,68,0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(239,68,68,0.35)",
+    padding: 12,
+    borderRadius: 12,
+    color: THEME.text,
+    fontWeight: "800",
+    marginTop: 10,
+  },
 
-adminCompRow: {
-  flexDirection: "row",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: 12,
-  paddingVertical: 12,
-  borderBottomWidth: 1,
-  borderBottomColor: THEME.border,
-},
+  adminCompRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: THEME.border,
+  },
 
-muted: {
-  color: THEME.text3,
-  textAlign: "center",
-  paddingVertical: 12,
-},
+  muted: {
+    color: THEME.text3,
+    textAlign: "center",
+    paddingVertical: 12,
+  },
 
-h2: {
-  fontSize: 18,
-  fontWeight: "900",
-  color: THEME.text,
-  marginBottom: 8,
-},
+  h2: {
+    fontSize: 18,
+    fontWeight: "900",
+    color: THEME.text,
+    marginBottom: 8,
+  },
 
-label: {
-  fontSize: 13,
-  fontWeight: "800",
-  color: THEME.text2,
-  marginBottom: 6,
-},
+  label: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: THEME.text2,
+    marginBottom: 6,
+  },
 
-pillRow: {
-  flexDirection: "row",
-  flexWrap: "wrap",
-  gap: 8,
-  marginTop: 6,
-},
+  pillRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 6,
+  },
 
-dayPill: {
-  paddingHorizontal: 12,
-  paddingVertical: 10,
-  borderRadius: 999,
-  borderWidth: 1,
-  borderColor: THEME.border,
-  backgroundColor: THEME.surface,
-},
+  dayPill: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    backgroundColor: THEME.surface,
+  },
 
-dayPillActive: {
-  borderColor: THEME.primary,
-  backgroundColor: "rgba(244,162,97,0.20)",
-},
+  dayPillActive: {
+    borderColor: THEME.primary,
+    backgroundColor: "rgba(244,162,97,0.20)",
+  },
 
-dayPillText: {
-  fontSize: 12,
-  fontWeight: "900",
-  color: THEME.text2,
-},
+  dayPillText: {
+    fontSize: 12,
+    fontWeight: "900",
+    color: THEME.text2,
+  },
 
-dayPillTextActive: {
-  color: THEME.text,
-},
+  dayPillTextActive: {
+    color: THEME.text,
+  },
 
-runnerCenter: {
+  runnerCenter: {
+    flex: 1,
+    paddingHorizontal: 10,
+    justifyContent: "center",
+  },
+
+  runnerName: {
+    fontSize: 15,
+    fontWeight: "900",
+    color: THEME.text,
+    textAlign: "left",
+  },
+
+  runnerMeta: {
+    alignItems: "flex-end", // ✅ right aligned
+    justifyContent: "center",
+    gap: 2,
+    maxWidth: 40, // keeps it from crushing the horse name
+  },
+
+  runnerMetaLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+
+  runnerMetaIcon: {
+    fontSize: 9,
+    fontWeight: "900",
+    color: THEME.text2,
+  },
+
+  runnerMetaText: {
+    fontSize: 12,
+    color: THEME.text2,
+    flexShrink: 1,
+  },
+
+  runnerMetaRow: {
+    flexDirection: "column", // ✅ stack J above T
+    alignItems: "flex-start",
+    marginTop: 2,
+    gap: 4, // smaller vertical gap
+  },
+
+  metaGroup: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    flexShrink: 1,
+  },
+
+  runnerMetaLineSingle: {
+    marginTop: 2,
+    fontSize: 10,
+    fontWeight: "700",
+    color: THEME.text2,
+    textAlign: "left",
+  },
+
+  statHeading: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#6b7280", // subtle grey
+    marginBottom: 4,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+
+  entrantRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+
+  pickerWrap: {
+    flex: 2,
+    borderRadius: 12,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: THEME.border ?? "#ddd",
+    backgroundColor: THEME.card ?? "#fff",
+  },
+
+  picker: {
+    height: 44,
+    width: "100%",
+    color: THEME.text1 ?? "#111",
+  },
+
+  pickerItem: {
+    fontSize: 16,
+  },
+
+  hotTipsBox: {
+    marginTop: 12,
+    padding: 14,
+    borderRadius: 46,
+    backgroundColor: "rgba(244,162,97,0.12)",
+    borderWidth: 10,
+    borderColor: "rgba(244,162,97,0.22)",
+  },
+
+  hotTipsTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+
+  hotTipsTitle: {
+    marginTop: 4,
+    fontSize: 12,
+    fontWeight: "900",
+    color: THEME.text,
+  },
+
+  hotTipsHorse: {
+    marginTop: 6,
+    fontSize: 14,
+    fontWeight: "900",
+    color: THEME.text,
+    textAlign: "center",
+  },
+
+  hotTipsMeta: {
+    marginTop: 2,
+    fontSize: 11,
+    fontWeight: "700",
+    color: THEME.text2,
+  },
+
+  headerWithHotTips: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+  },
+
+  hotTipsSquare: {
+    width: 150,
+    height: 120,
+    padding: 5,
+    borderRadius: 16,
+
+    backgroundColor: "rgba(244,162,97,0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(244,162,97,0.22)",
+
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  stickyRaceSelectorWrap: {
+    backgroundColor: THEME.bg, // important so it doesn’t look transparent while stuck
+    paddingTop: 8,
+    paddingBottom: 10,
+    zIndex: 10,
+  },
+
+  segmentWrap: {
+    gap: 10,
+    marginVertical: 10,
+  },
+
+  segmentRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+
+  segmentInner: {
+    flexDirection: "row",
+    backgroundColor: "#F1F3F8", // soft neutral like My Tips
+    borderRadius: 999,
+    padding: 4,
+    width: "92%",
+    maxWidth: 520,
+  },
+
+  segmentItem: {
+    flex: 1, // equal-width segments
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 999,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  segmentItemActive: {
+    backgroundColor: "#FFFFFF",
+    shadowColor: "#000",
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+
+  segmentItemText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#6B7280", // muted inactive text
+  },
+
+  segmentItemTextActive: {
+    color: "#111827", // strong active text
+  },
+
+  overallChoice: {
+    width: "100%",
+    alignItems: "center",
+  },
+
+  dayChoice: {
+    flex: 1, // evenly spreads dates across the row
+  },
+
+  placementRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+
+  placementText: {
+    flex: 1,
+  },
+
+  tipsPill: {
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    backgroundColor: "rgba(0,0,0,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.08)",
+  },
+
+  tipsPillText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "rgba(0,0,0,0.70)",
+  },
+
+  dayTabText: {
+    textAlign: "center",
+    lineHeight: 16,
+    flexShrink: 1,
+  },
+
+  rankCardContent: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  rankCardTitle: {
+    fontSize: 13,
+    letterSpacing: 0.4,
+    color: THEME.text2,
+    marginBottom: 6,
+  },
+
+  rankCardPosition: {
+    fontSize: 22,
+    fontWeight: "700",
+    color: THEME.text1,
+  },
+
+  rankCardOf: {
+    fontSize: 16,
+    fontWeight: "500",
+    color: THEME.text2,
+  },
+
+  rankCardAmount: {
+    marginTop: 6,
+    fontSize: 15,
+    fontWeight: "600",
+    color: THEME.text2,
+  },
+
+  metaGroup: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    flexShrink: 1,
+  },
+
+  metaBadge: {
+    fontSize: 10,
+    fontWeight: "700",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    backgroundColor: "rgba(0,0,0,0.06)",
+    color: THEME.text2,
+    overflow: "hidden",
+  },
+
+  runnerMetaText: {
+    fontSize: 12,
+    color: THEME.text2,
+    flexShrink: 1,
+  },
+
+  raceHeaderTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    marginBottom: 6,
+  },
+
+  mostTippedInline: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    backgroundColor: "rgba(255, 170, 0, 0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 170, 0, 0.25)",
+    maxWidth: 210,
+  },
+
+  mostTippedInlineText: {
+    fontSize: 12,
+    color: THEME.text2,
+    fontWeight: "600",
+    flexShrink: 1,
+  },
+
+  mostTippedInlineHorse: {
+    color: THEME.text1,
+    fontWeight: "800",
+  },
+
+  mostTippedInlineUnder: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    backgroundColor: "rgba(255, 170, 0, 0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 170, 0, 0.25)",
+    marginTop: 8,
+    marginBottom: 8, // gives breathing room before "Tips close in"
+    alignSelf: "flex-start", // keeps it neatly under the date, not stretched
+  },
+
+  runnerRowTop: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+  },
+
+  runnerInsetLeftTop: {
+    alignSelf: "flex-start",
+    marginTop: 2,
+  },
+
+  runnerMain: {
+    flex: 1,
+    paddingLeft: 10,
+  },
+
+  runnerMetaUnderNumber: {
+    marginTop: 4,
+    marginLeft: -10,
+  },
+
+  runnerRightCol: {
+    alignItems: "flex-end",
+    gap: 6,
+    minWidth: 80,
+  },
+
+  pickCtaPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
+    backgroundColor: "rgba(0,0,0,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.08)",
+  },
+
+  pickCtaText: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: THEME.text1,
+  },
+
+  runnerMetaFullRow: {
+    marginTop: 4,
+  },
+
+  // ✅ Pull meta left so it lines up with the left edge of the number inset
+  // If it’s slightly off, adjust this number to match your runnerInsetLeft width + gap.
+  runnerMetaFullRow: {
+    flexDirection: "row",
+    marginTop: 4,
+  },
+
+  // IMPORTANT: set this to match your number inset column width + the gap to runnerMain
+  // Start with 54–60, tweak once if needed.
+  runnerMetaLeftSpacer: {
+    width: 56,
+  },
+
+  runnerMetaContent: {
+    flex: 1,
+  },
+
+  runnerMetaStack: {
+    marginTop: 4,
+  },
+
+  runnerRowNew: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+  },
+
+  runnerLeftStack: {
+    alignItems: "center",
+    gap: 8,
+  },
+
+  pickUnderNumberPill: {
+    width: 60,
+    paddingVertical: 6,
+    borderRadius: 12,
+    backgroundColor: "rgba(0,0,0,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.08)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  pickUnderNumberText: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: THEME.text1,
+  },
+
+  oddsTallBox: {
+    alignSelf: "stretch",
+    minWidth: 72,
+    borderRadius: 14,
+    backgroundColor: "rgba(0,0,0,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.08)",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 10,
+  },
+
+  runnerInsetLeftUnified: {
+    width: 60,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: "rgba(0,0,0,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.08)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  // -------------------------------------------------------------------
+  // ✅ NEW (added): Auth “previous iteration” look styles
+  // Use these in AuthScreen:
+  // styles.authScreen, authBg, authBgOverlay, authCardWrap, authLockBadge,
+  // authCardContainer, authCardTitle, authCardSubtitle, authInput, authBtn, etc.
+  // -------------------------------------------------------------------
+  authScreen: {
+    flex: 1,
+    backgroundColor: THEME.bg,
+  },
+  authBg: {
   flex: 1,
-  paddingHorizontal: 10,
-  justifyContent: "center",
-},
-
-runnerName: {
-  fontSize: 15,
-  fontWeight: "900",
-  color: THEME.text,
-  textAlign: "left",
-},
-
-runnerMeta: {
-  alignItems: "flex-end", // ✅ right aligned
-  justifyContent: "center",
-  gap: 2,
-  maxWidth: 40,          // keeps it from crushing the horse name
-},
-
-runnerMetaLine: {
-  flexDirection: "row",
-  alignItems: "center",
-  gap: 4,
-},
-
-runnerMetaIcon: {
-  fontSize: 9,
-  fontWeight: "900",
-  color: THEME.text2,
-},
-
-runnerMetaText: {
-  fontSize: 12,
-  color: THEME.text2,
-  flexShrink: 1,
-},
-
-runnerMetaRow: {
-  flexDirection: "column",   // ✅ stack J above T
-  alignItems: "flex-start",
-  marginTop: 2,
-  gap: 4,                    // smaller vertical gap
-},
-
-metaGroup: {
-  flexDirection: "row",
-  alignItems: "center",
-  gap: 6,
-  flexShrink: 1,
-},
-
-runnerMetaLineSingle: {
-  marginTop: 2,
-  fontSize: 10,
-  fontWeight: "700",
-  color: THEME.text2,
-  textAlign: "left",
-},
-
-statHeading: {
-  fontSize: 12,
-  fontWeight: "600",
-  color: "#6b7280", // subtle grey
-  marginBottom: 4,
-  textTransform: "uppercase",
-  letterSpacing: 0.5,
-},
-
-entrantRow: {
-  flexDirection: "row",
-  alignItems: "center",
-  justifyContent: "space-between",
-},
-
-pickerWrap: {
-  flex: 2,
-  borderRadius: 12,
-  overflow: "hidden",
-  borderWidth: 1,
-  borderColor: THEME.border ?? "#ddd",
-  backgroundColor: THEME.card ?? "#fff",
-},
-
-picker: {
-  height: 44,
   width: "100%",
-  color: THEME.text1 ?? "#111",
-},
-
-pickerItem: {
-  fontSize: 16,
-},
-
-hotTipsBox: {
-  marginTop: 12,
-  padding: 14,
-  borderRadius: 46,
-  backgroundColor: "rgba(244,162,97,0.12)",
-  borderWidth: 10,
-  borderColor: "rgba(244,162,97,0.22)",
-},
-
-hotTipsTitleRow: {
-  flexDirection: "row",
-  alignItems: "center",
-  gap: 8,
-},
-
-hotTipsTitle: {
-  marginTop: 4,
-  fontSize: 12,
-  fontWeight: "900",
-  color: THEME.text,
-},
-
-hotTipsHorse: {
-  marginTop: 6,
-  fontSize: 14,
-  fontWeight: "900",
-  color: THEME.text,
-  textAlign: "center",
-},
-
-hotTipsMeta: {
-  marginTop: 2,
-  fontSize: 11,
-  fontWeight: "700",
-  color: THEME.text2,
-},
-
-headerWithHotTips: {
-  flexDirection: "row",
-  alignItems: "flex-start",
-  gap: 12,
-},
-
-hotTipsSquare: {
-  width: 150,
-  height: 120,
-  padding: 5,
-  borderRadius: 16,
-
-  backgroundColor: "rgba(244,162,97,0.12)",
-  borderWidth: 1,
-  borderColor: "rgba(244,162,97,0.22)",
-
-  alignItems: "center",
+  minHeight: "100vh",
+  backgroundColor: "#e9dad0a1", // slightly darker than card
   justifyContent: "center",
-},
-
-stickyRaceSelectorWrap: {
-  backgroundColor: THEME.bg,     // important so it doesn’t look transparent while stuck
-  paddingTop: 8,
-  paddingBottom: 10,
-  zIndex: 10,
-},
-
-segmentWrap: {
-  gap: 10,
-  marginVertical: 10,
-},
-
-segmentRow: {
-  flexDirection: "row",
-  gap: 10,
-},
-
-segmentInner: {
-  flexDirection: "row",
-  backgroundColor: "#F1F3F8", // soft neutral like My Tips
-  borderRadius: 999,
-  padding: 4,
-  width: "92%",
-  maxWidth: 520,
-},
-
-segmentItem: {
-  flex: 1, // equal-width segments
-  paddingHorizontal: 14,
-  paddingVertical: 10,
-  borderRadius: 999,
   alignItems: "center",
-  justifyContent: "center",
 },
+  authBgOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.25)",
+  },
+  authCardWrapNew: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 24,
+  },
+  authLockBadgeNew: {
+    position: "absolute",
+    top: -14,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: THEME.primary,
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 10,
+    shadowColor: "#000",
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+  },
+  authLockBadgeTextNew: { fontSize: 16 },
+  authCardContainerNew: {
+    width: "100%",
+    maxWidth: 520,
+    backgroundColor: "rgba(255,255,255,0.92)",
+    borderRadius: 18,
+    paddingHorizontal: 18,
+    paddingTop: 26,
+    paddingBottom: 18,
+    shadowColor: "#000",
+    shadowOpacity: 0.18,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 6,
+  },
+  authCardTitleNew: {
+    fontSize: 20,
+    fontWeight: "800",
+    textAlign: "center",
+    marginBottom: 8,
+    color: "#1A1A1A",
+  },
+  authCardSubtitleNew: {
+    fontSize: 13,
+    textAlign: "center",
+    marginBottom: 16,
+    color: "#555",
+    lineHeight: 18,
+  },
+  authInputNew: {
+    height: 46,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    backgroundColor: "#EAF2FF",
+    borderWidth: 1,
+    borderColor: "#D6E4FF",
+    marginBottom: 12,
+    fontSize: 15,
+    color: "#111",
+  },
+  authBtnNew: {
+    height: 48,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#EFEFEF",
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.08)",
+  },
+  authBtnPrimaryNew: {
+    backgroundColor: THEME.primary,
+    borderColor: "rgba(0,0,0,0.08)",
+  },
+  authBtnTextNew: {
+    fontSize: 15,
+    fontWeight: "800",
+    color: "#222",
+  },
+  authBtnTextPrimaryNew: {
+    color: "#111",
+  },
+  authPrivacyTextNew: {
+    fontSize: 11,
+    color: "#666",
+    marginTop: 14,
+    lineHeight: 15,
+    textAlign: "center",
+  },
 
-segmentItemActive: {
-  backgroundColor: "#FFFFFF",
+landingPrizeCard: {
+  backgroundColor: "rgba(255,255,255,0.92)",
   shadowColor: "#000",
-  shadowOpacity: 0.08,
-  shadowRadius: 6,
-  shadowOffset: { width: 0, height: 2 },
-  elevation: 2,
-},
-
-segmentItemText: {
-  fontSize: 13,
-  fontWeight: "700",
-  color: "#6B7280", // muted inactive text
-},
-
-segmentItemTextActive: {
-  color: "#111827", // strong active text
-},
-
-overallChoice: {
-  width: "100%",
+  shadowOpacity: 0.12,
+  shadowRadius: 18,
+  shadowOffset: { width: 0, height: 10 },
+  elevation: 6,
   alignItems: "center",
 },
 
-dayChoice: {
-  flex: 1, // evenly spreads dates across the row
-},
-
-placementRow: {
-  flexDirection: "row",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: 10,
-},
-
-placementText: {
-  flex: 1,
-},
-
-tipsPill: {
-  paddingVertical: 4,
-  paddingHorizontal: 10,
-  borderRadius: 999,
-  backgroundColor: "rgba(0,0,0,0.06)",
-  borderWidth: 1,
-  borderColor: "rgba(0,0,0,0.08)",
-},
-
-tipsPillText: {
+landingKicker: {
+  marginTop: 8,
   fontSize: 12,
-  fontWeight: "600",
-  color: "rgba(0,0,0,0.70)",
-},
-
-dayTabText: {
+  letterSpacing: 0.6,
+  fontWeight: "700",
+  color: "#3E3E3E",
   textAlign: "center",
-  lineHeight: 16,
-  flexShrink: 1,
 },
 
-rankCardContent: {
+landingAmount: {
+  marginTop: 6,
+  fontSize: 34,
+  fontWeight: "900",
+  color: "#F59A00", // orange
+  textAlign: "center",
+},
+
+landingSub: {
+  marginTop: 8,
+  fontSize: 12,
+  color: "#4B5563",
+  textAlign: "center",
+},
+
+landingCta: {
+  marginTop: 12,
+  width: "100%",
+  borderRadius: 16,
+  paddingVertical: 14,
+  backgroundColor: "#0B6B4D",
   alignItems: "center",
   justifyContent: "center",
-},
-
-rankCardTitle: {
-  fontSize: 13,
-  letterSpacing: 0.4,
-  color: THEME.text2,
-  marginBottom: 6,
-},
-
-rankCardPosition: {
-  fontSize: 22,
-  fontWeight: "700",
-  color: THEME.text1,
-},
-
-rankCardOf: {
-  fontSize: 16,
-  fontWeight: "500",
-  color: THEME.text2,
-},
-
-rankCardAmount: {
-  marginTop: 6,
-  fontSize: 15,
-  fontWeight: "600",
-  color: THEME.text2,
-},
-
-
-metaGroup: {
-  flexDirection: "row",
-  alignItems: "center",
-  gap: 6,
-  flexShrink: 1,
-},
-
-metaBadge: {
-  fontSize: 10,
-  fontWeight: "700",
-  paddingHorizontal: 6,
-  paddingVertical: 2,
-  borderRadius: 6,
-  backgroundColor: "rgba(0,0,0,0.06)",
-  color: THEME.text2,
   overflow: "hidden",
 },
 
-runnerMetaText: {
-  fontSize: 12,
-  color: THEME.text2,
-  flexShrink: 1,
-},
-
-raceHeaderTopRow: {
-  flexDirection: "row",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: 10,
-  marginBottom: 6,
-},
-
-mostTippedInline: {
-  flexDirection: "row",
-  alignItems: "center",
-  gap: 8,
-  paddingVertical: 6,
-  paddingHorizontal: 10,
-  borderRadius: 12,
-  backgroundColor: "rgba(255, 170, 0, 0.12)",
-  borderWidth: 1,
-  borderColor: "rgba(255, 170, 0, 0.25)",
-  maxWidth: 210,
-},
-
-mostTippedInlineText: {
-  fontSize: 12,
-  color: THEME.text2,
-  fontWeight: "600",
-  flexShrink: 1,
-},
-
-mostTippedInlineHorse: {
-  color: THEME.text1,
+landingCtaText: {
+  fontSize: 14,
   fontWeight: "800",
+  color: "#FFFFFF",
+  letterSpacing: 0.4,
 },
 
-mostTippedInlineUnder: {
-  flexDirection: "row",
-  alignItems: "center",
-  gap: 8,
-  paddingVertical: 6,
-  paddingHorizontal: 10,
-  borderRadius: 12,
-  backgroundColor: "rgba(255, 170, 0, 0.12)",
-  borderWidth: 1,
-  borderColor: "rgba(255, 170, 0, 0.25)",
-  marginTop: 8,
-  marginBottom: 8, // gives breathing room before "Tips close in"
-  alignSelf: "flex-start", // keeps it neatly under the date, not stretched
-},
-
-runnerRowTop: {
-  flexDirection: "row",
-  alignItems: "flex-start",
-},
-
-runnerInsetLeftTop: {
-  alignSelf: "flex-start",
-  marginTop: 2,
-},
-
-runnerMain: {
-  flex: 1,
-  paddingLeft: 10,
-},
-
-runnerMetaUnderNumber: {
-  marginTop: 4,
-  marginLeft: -10,
-},
-
-runnerRightCol: {
-  alignItems: "flex-end",
-  gap: 6,
-  minWidth: 80,
-},
-
-pickCtaPill: {
-  paddingHorizontal: 10,
-  paddingVertical: 5,
-  borderRadius: 12,
-  backgroundColor: "rgba(0,0,0,0.06)",
-  borderWidth: 1,
-  borderColor: "rgba(0,0,0,0.08)",
-},
-
-pickCtaText: {
-  fontSize: 12,
-  fontWeight: "800",
-  color: THEME.text1,
-},
-
-runnerMetaFullRow: {
-  marginTop: 4,
-},
-
-// ✅ Pull meta left so it lines up with the left edge of the number inset
-// If it’s slightly off, adjust this number to match your runnerInsetLeft width + gap.
-runnerMetaFullRow: {
-  flexDirection: "row",
-  marginTop: 4,
-},
-
-// IMPORTANT: set this to match your number inset column width + the gap to runnerMain
-// Start with 54–60, tweak once if needed.
-runnerMetaLeftSpacer: {
-  width: 56,
-},
-
-runnerMetaContent: {
-  flex: 1,
-},
-
-runnerMetaStack: {
-  marginTop: 4,
-},
-
-runnerRowNew: {
-  flexDirection: "row",
-  alignItems: "flex-start",
-},
-
-runnerLeftStack: {
+landingHeader: {
   alignItems: "center",
   gap: 8,
 },
 
-pickUnderNumberPill: {
-  width: 60,
-  paddingVertical: 6,
-  borderRadius: 12,
-  backgroundColor: "rgba(0,0,0,0.06)",
-  borderWidth: 1,
-  borderColor: "rgba(0,0,0,0.08)",
-  alignItems: "center",
-  justifyContent: "center",
-},
-
-pickUnderNumberText: {
-  fontSize: 12,
-  fontWeight: "800",
-  color: THEME.text1,
-},
-
-oddsTallBox: {
-  alignSelf: "stretch",
-  minWidth: 72,
-  borderRadius: 14,
-  backgroundColor: "rgba(0,0,0,0.06)",
-  borderWidth: 1,
-  borderColor: "rgba(0,0,0,0.08)",
-  alignItems: "center",
-  justifyContent: "center",
-  paddingHorizontal: 10,
-},
-
-runnerInsetLeftUnified: {
-  width: 60,
+landingBadgePinned: {
+  position: "absolute",
+  top: -18,
+  alignSelf: "center",
+  width: 36,
   height: 36,
-  borderRadius: 12,
-  backgroundColor: "rgba(0,0,0,0.06)",
-  borderWidth: 1,
-  borderColor: "rgba(0,0,0,0.08)",
+  borderRadius: 18,
+  backgroundColor: "#0B6B4D", // green badge
   alignItems: "center",
   justifyContent: "center",
+  shadowColor: "#000",
+  shadowOpacity: 0.12,
+  shadowRadius: 10,
+  shadowOffset: { width: 0, height: 6 },
+  elevation: 4,
+},
+
+landingBadgeIcon: {
+  fontSize: 18,
+},
+
+landingAmounts: {
+  alignItems: "center",
+  marginBottom: 10,
+},
+
+landingHeroWrap: {
+  width: "100%",
+  borderRadius: 18,
+  overflow: "hidden",
+  aspectRatio: 16 / 10, // ✅ responsive height
+  marginBottom: 14,
+},
+
+landingHeroImage: {
+  justifyContent: "flex-start",
 },
 
 });
