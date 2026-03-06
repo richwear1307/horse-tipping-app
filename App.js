@@ -555,7 +555,10 @@ function GameApp({ user }) {
   const [prefillHorse, setPrefillHorse] = useState(null);
   const [tips, setTips] = useState([]);
   const [tipsLoading, setTipsLoading] = useState(true);
-  const [allTips, setAllTips] = useState([]); // ✅ NEW: all users' tips for home leaderboard summary
+  const [overallBoardRows, setOverallBoardRows] = useState([]);
+const [dayBoardRows, setDayBoardRows] = useState([]);
+const [resultTipCounts, setResultTipCounts] = useState({});
+const [allRaceTipCounts, setAllRaceTipCounts] = useState({});
   const [results, setResults] = useState({}); // local results for now
 const [races, setRaces] = useState([]);
 const [racesLoading, setRacesLoading] = useState(true);
@@ -774,6 +777,67 @@ const visibleRaces = useMemo(() => races ?? [], [races]);
     [visibleRaces, nowTick]
   );
 
+useEffect(() => {
+  if (!activeCompetitionId) {
+    setOverallBoardRows([]);
+    return;
+  }
+
+  const q = query(
+    collection(firestoreDb, "competitions", activeCompetitionId, "leaderboard"),
+    orderBy("totalReturnInclStake", "desc"),
+    limit(200)
+  );
+
+  const unsub = onSnapshot(
+    q,
+    (snap) => {
+      const rows = snap.docs.map((d) => ({
+        userId: d.id,
+        ...d.data(),
+      }));
+      setOverallBoardRows(rows);
+    },
+    (err) => showMessage("Overall leaderboard load error", err.message)
+  );
+
+  return unsub;
+}, [activeCompetitionId]);
+
+useEffect(() => {
+  if (!activeCompetitionId || !activeDay) {
+    setDayBoardRows([]);
+    return;
+  }
+
+  const q = query(
+    collection(
+      firestoreDb,
+      "competitions",
+      activeCompetitionId,
+      "leaderboardDays",
+      activeDay,
+      "users"
+    ),
+    orderBy("totalReturnInclStake", "desc"),
+    limit(200)
+  );
+
+  const unsub = onSnapshot(
+    q,
+    (snap) => {
+      const rows = snap.docs.map((d) => ({
+        userId: d.id,
+        ...d.data(),
+      }));
+      setDayBoardRows(rows);
+    },
+    (err) => showMessage("Daily leaderboard load error", err.message)
+  );
+
+  return unsub;
+}, [activeCompetitionId, activeDay]);  
+
 const registeredUserIds = useMemo(() => {
   if (!activeCompetitionId) return [];
 
@@ -825,20 +889,6 @@ const q = query(
   return unsubscribe;
 }, [user]);
 
-// ✅ NEW: Global tips feed (all users) for Home screen rank + winnings
-useEffect(() => {
-  const unsub = onSnapshot(
-    collection(firestoreDb, "tips"),
-    (snapshot) => {
-      const list = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
-      setAllTips(list);
-    },
-    (err) => showMessage("Tips load error", err.message)
-  );
-
-  return unsub;
-}, []);
-
 useEffect(() => {
   const unsubscribe = onSnapshot(
     collection(firestoreDb, "results"),
@@ -854,6 +904,36 @@ useEffect(() => {
 
   return unsubscribe;
 }, []);
+
+useEffect(() => {
+  if (screen !== "results") {
+    setResultTipCounts({});
+    return;
+  }
+
+  const unsub = onSnapshot(
+    collection(firestoreDb, "tips"),
+    (snapshot) => {
+      const counts = {};
+
+      snapshot.docs.forEach((docSnap) => {
+        const t = docSnap.data() || {};
+        const raceId = String(t.raceId || "").trim();
+        const horseName = String(t.horseName || "").trim();
+
+        if (!raceId || !horseName) return;
+
+        const key = `${raceId}__${horseName}`;
+        counts[key] = (counts[key] || 0) + 1;
+      });
+
+      setResultTipCounts(counts);
+    },
+    (err) => showMessage("Tips load error", err.message)
+  );
+
+  return unsub;
+}, [screen]);
 
 useEffect(() => {
   if (!user) return;
@@ -910,6 +990,61 @@ useEffect(() => {
 
   const selectedRace = visibleRaces.find((r) => r.id === selectedRaceId) || null;
 
+useEffect(() => {
+  if (screen !== "races" || !activeDay) {
+    setAllRaceTipCounts({});
+    return;
+  }
+
+  let cancelled = false;
+
+  const loadRaceTipCounts = async () => {
+    try {
+      const raceIdsForDay = (visibleRaces || [])
+        .filter((r) => r.date === activeDay)
+        .map((r) => r.id)
+        .filter(Boolean);
+
+      if (!raceIdsForDay.length) {
+        if (!cancelled) setAllRaceTipCounts({});
+        return;
+      }
+
+      const snap = await getDocs(collection(firestoreDb, "tips"));
+      const next = {};
+
+      snap.docs.forEach((docSnap) => {
+        const t = docSnap.data() || {};
+        const raceId = String(t.raceId || "").trim();
+        const horseName = String(t.horseName || "").trim();
+
+        if (!raceId || !horseName) return;
+        if (!raceIdsForDay.includes(raceId)) return;
+
+        if (!next[raceId]) next[raceId] = {};
+        next[raceId][horseName] = (next[raceId][horseName] || 0) + 1;
+      });
+
+      if (!cancelled) {
+        setAllRaceTipCounts(next);
+      }
+    } catch (err) {
+      if (!cancelled) {
+        showMessage("Race tip counts load error", err.message);
+      }
+    }
+  };
+
+  loadRaceTipCounts();
+
+  const intervalId = setInterval(loadRaceTipCounts, 30 * 60 * 1000);
+
+  return () => {
+    cancelled = true;
+    clearInterval(intervalId);
+  };
+}, [screen, activeDay, visibleRaces]);
+
   // Used to highlight the correct tab in the footer
   const activeTab = screen === "raceDetails" ? "races" : screen;
 
@@ -921,54 +1056,26 @@ const gbpTotal = useMemo(() => {
   return total;
 }, [tips, results]);
 
-  // ✅ NEW: Home screen leaderboard position + winnings (Today vs Cumulative)
-  const homeLeaderboard = useMemo(() => {
-    const racesById = Object.fromEntries((visibleRaces ?? []).map((r) => [r.id, r]));
+const homeLeaderboard = useMemo(() => {
+  const overallRows = overallBoardRows ?? [];
+  const dayRows = dayBoardRows ?? [];
 
-    // Only count tips for races that have results (i.e., completed/settled)
-    const completedTips = (allTips ?? []).filter((t) => !!results?.[t.raceId]);
+  const overallIndex = overallRows.findIndex((r) => r.userId === user.uid);
+  const dayIndex = dayRows.findIndex((r) => r.userId === user.uid);
 
-    const buildRows = (scope) => {
-      const byUser = {}; // userId -> { userId, gbp }
+  const overallRow = overallIndex >= 0 ? overallRows[overallIndex] : null;
+  const dayRow = dayIndex >= 0 ? dayRows[dayIndex] : null;
 
-      const scoped =
-        scope === "all"
-          ? completedTips
-          : completedTips.filter((t) => {
-              const race = racesById[t.raceId];
-              return race && race.date === calendarDay;
-            });
+  return {
+    dayRank: dayIndex >= 0 ? dayIndex + 1 : null,
+    dayTotalUsers: dayRows.length,
+    dayWinnings: Number(dayRow?.totalReturnInclStake ?? 0),
 
-      for (const t of scoped) {
-        const userId = t.userId || "unknown";
-        if (!byUser[userId]) byUser[userId] = { userId, gbp: 0 };
-
-        byUser[userId].gbp += calcGbpProfitForTip(
-          t,
-          results?.[t.raceId],
-          STAKE_GBP
-        );
-      }
-
-      return Object.values(byUser).sort((a, b) => b.gbp - a.gbp);
-    };
-
-    const dayRows = buildRows("day");
-    const allRows = buildRows("all");
-
-    const dayIndex = dayRows.findIndex((r) => r.userId === user.uid);
-    const allIndex = allRows.findIndex((r) => r.userId === user.uid);
-
-    return {
-      dayRank: dayIndex >= 0 ? dayIndex + 1 : null,
-      dayTotalUsers: dayRows.length,
-      dayWinnings: dayIndex >= 0 ? dayRows[dayIndex].gbp : 0,
-
-      allRank: allIndex >= 0 ? allIndex + 1 : null,
-      allTotalUsers: allRows.length,
-      allWinnings: allIndex >= 0 ? allRows[allIndex].gbp : 0,
-    };
-  }, [allTips, results, visibleRaces, calendarDay, user.uid]);
+    allRank: overallIndex >= 0 ? overallIndex + 1 : null,
+    allTotalUsers: overallRows.length,
+    allWinnings: Number(overallRow?.totalReturnInclStake ?? 0),
+  };
+}, [overallBoardRows, dayBoardRows, user.uid]);
 
 if (screen === "results") {
   return (
@@ -981,7 +1088,7 @@ if (screen === "results") {
  <ResultsScreen
         races={visibleRaces}
   results={results}
-  allTips={allTips}
+  resultTipCounts={resultTipCounts}
   activeDay={activeDay}
   onBack={() => setScreen("home")}
 />
@@ -1051,11 +1158,11 @@ if (screen === "races") {
 />
       <RacesScreen
         races={visibleRaces}
-        racesLoading={racesLoading}
-        activeDay={activeDay}
-        tips={tips}
-        allTips={allTips}
-        onBack={() => setScreen("home")}
+  racesLoading={racesLoading}
+  activeDay={activeDay}
+  tips={tips}
+  allRaceTipCounts={allRaceTipCounts}
+  onBack={() => setScreen("home")}
 onPickTip={async (raceId, horseName, wasSelected) => {
   try {
     const race = visibleRaces.find((r) => r.id === raceId);
@@ -1246,7 +1353,6 @@ if (screen === "myTips") {
               results={results}
   races={visibleRaces}
   activeDay={activeDay}
-  allTips={allTips}
   usersMap={usersMap}
   nowTick={nowTick}
   activeCompetitionId={activeCompetitionId}
@@ -2410,7 +2516,7 @@ function HomeScreen({
   );
 }
 
-function ResultsScreen({ races, results, allTips, activeDay, onBack }) {
+function ResultsScreen({ races, results, resultTipCounts, activeDay, onBack }) {
   const [nowTick, setNowTick] = useState(Date.now());
   const [selectedDay, setSelectedDay] = useState(null);
   const [expanded, setExpanded] = useState({}); // raceId -> bool
@@ -2588,10 +2694,10 @@ const toggleRace = (raceId) => {
 
         // Count tips for a specific horse in this race
         const countTipsForHorse = (raceId, horseName) => {
-          if (!horseName) return 0;
-          const list = allTips ?? [];
-          return list.filter((t) => t?.raceId === raceId && t?.horseName === horseName).length;
-        };
+  if (!horseName) return 0;
+  const key = `${raceId}__${horseName}`;
+  return Number(resultTipCounts?.[key] ?? 0);
+};
 
         const tipLabel = (n) => `${n} ${n === 1 ? "tip" : "tips"}`;
 
@@ -2772,7 +2878,7 @@ function ProfileScreen({ user, onBack }) {
 // ✅ NOTE: Make sure you have this import at the top of the file:
 // import { Animated } from "react-native";
 
-function RacesScreen({ races, racesLoading, activeDay, tips, onBack, onPickTip, allTips }) {
+function RacesScreen({ races, racesLoading, activeDay, tips, allRaceTipCounts, onBack, onPickTip }) {
   const [now, setNow] = useState(Date.now());
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [horseSort, setHorseSort] = useState("odds"); // "odds" | "number"
@@ -2816,30 +2922,25 @@ function RacesScreen({ races, racesLoading, activeDay, tips, onBack, onPickTip, 
   }, [selectedIndex]);
 
   const hotTip = useMemo(() => {
-    if (!selectedRace?.id) return null;
+  if (!selectedRace?.id) return null;
 
-    const raceTips = (allTips ?? []).filter((t) => t?.raceId === selectedRace.id);
-    if (raceTips.length === 0) return null;
+  const raceCounts = allRaceTipCounts?.[selectedRace.id] || {};
+  const entries = Object.entries(raceCounts);
 
-    const counts = new Map();
-    for (const t of raceTips) {
-      const name = String(t?.horseName ?? "").trim();
-      if (!name) continue;
-      counts.set(name, (counts.get(name) ?? 0) + 1);
+  if (!entries.length) return null;
+
+  let bestHorse = null;
+  let bestCount = 0;
+
+  for (const [horseName, tipCount] of entries) {
+    if (tipCount > bestCount) {
+      bestHorse = horseName;
+      bestCount = tipCount;
     }
+  }
 
-    let bestHorse = null;
-    let bestCount = 0;
-
-    for (const [horseName, tipCount] of counts.entries()) {
-      if (tipCount > bestCount) {
-        bestHorse = horseName;
-        bestCount = tipCount;
-      }
-    }
-
-    return bestHorse ? { horseName: bestHorse, tipCount: bestCount } : null;
-  }, [allTips, selectedRace?.id]);
+  return bestHorse ? { horseName: bestHorse, tipCount: bestCount } : null;
+}, [allRaceTipCounts, selectedRace?.id]);
 
   // Current user's saved tip(s) for this day (one per raceId)
   const tipByRaceId = useMemo(() => {
@@ -3247,7 +3348,6 @@ function MyTipsScreen({
   results,
   races,
   activeDay,
-  allTips,
   usersMap,
   nowTick,
   activeCompetitionId,
