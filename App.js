@@ -2195,10 +2195,10 @@ function HomeScreen({
                 <Text style={styles.heroKicker}>
                   TOTAL PRIZE POT FOR THE COMPETITION
                 </Text>
-                <Text style={styles.heroHeadline}>£TBC DAILY</Text>
-                <Text style={styles.heroHeadline}>£TBC OVERALL</Text>
+                <Text style={styles.heroHeadline}>£- DAILY</Text>
+                <Text style={styles.heroHeadline}>£- OVERALL</Text>
                 <Text style={styles.heroSub}>
-                  We will confirm total payouts once we have a confirm entry list.
+                  We will confirm total payouts once we have a confirmed amount of entries.
                 </Text>
 
                 <AnimatedPressable
@@ -2220,7 +2220,7 @@ function HomeScreen({
                       { transform: [{ translateX: sheenX }, { rotate: "20deg" }] },
                     ]}
                   />
-                  <Text style={styles.heroCtaText}>TIPS WILL OPEN SHORTLY</Text>
+                  <Text style={styles.heroCtaText}>TAP TO MAKE YOUR PICKS FOR DAY 1</Text>
                 </AnimatedPressable>
               </View>
             </View>
