@@ -2014,8 +2014,8 @@ function AuthScreen() {
                   onPress={() => showForm("login")}
                   disabled={busy}
                 >
-                  <Text style={styles.buttonText}>
-                    Sign in using email link (no password)
+                  <Text style={styles.buttonTextEmail}>
+                    Sign in using email link (must be registered)
                   </Text>
                 </Pressable>
               </View>
@@ -4927,6 +4927,13 @@ const styles = StyleSheet.create({
     color: THEME.text,
   },
 
+  buttonTextEmail: {
+    fontSize: 16,
+    fontWeight: "800",
+    textAlign: "center",
+    color: THEME.text,
+  },
+  
   card: {
     backgroundColor: THEME.surface,
     borderRadius: THEME.r16,
@@ -5036,6 +5043,7 @@ heroBg: {
   heroCtaText: {
     fontSize: 14,
     fontWeight: "900",
+    textAlign: "center",
     letterSpacing: 0.8,
     color: "#fff",
   },
