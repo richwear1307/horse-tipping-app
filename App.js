@@ -543,6 +543,7 @@ function GameApp({ user }) {
   leaderboard: "Leaderboard",
   results: "Results",
   profile: "Profile",
+  rules: "Rules",
 
   // Admin screens
   adminSelectCompetition: "Admin – Select Competition",
@@ -984,6 +985,29 @@ if (screen === "results") {
   activeDay={activeDay}
   onBack={() => setScreen("home")}
 />
+      <FooterBar
+        active={activeTab}
+        onGoHome={() => setScreen("home")}
+        onGoRaces={() => setScreen("races")}
+        onGoMyTips={() => setScreen("myTips")}
+        onGoLeaderboard={() => setScreen("leaderboard")}
+        onGoResults={() => setScreen("results")}
+      />
+    </View>
+  );
+}
+
+if (screen === "rules") {
+  return (
+    <View style={{ flex: 1, paddingBottom: FOOTER_HEIGHT }}>
+      <TopBar
+        onLogout={() => signOut(auth)}
+        onProfile={() => setScreen("profile")}
+        onAdmin={isAdmin ? () => setScreen("adminSelectCompetition") : null}
+      />
+
+      <RulesScreen onBack={() => setScreen("home")} />
+
       <FooterBar
         active={activeTab}
         onGoHome={() => setScreen("home")}
@@ -1557,6 +1581,7 @@ if (screen === "leaderboard") {
         nowTick={nowTick}
         onGoRaces={() => setScreen("races")}
         onGoMyTips={() => setScreen("myTips")}
+        onGoRules={() => setScreen("rules")}
         onGoAdmin={isAdmin ? () => setScreen("admin") : null}
         onGoLeaderboard={() => setScreen("leaderboard")}
         onGoResults={() => setScreen("results")}
@@ -2067,6 +2092,7 @@ function HomeScreen({
   cumulativeWinnings,
   onGoRaces,
   onGoMyTips,
+  onGoRules,
   onGoAdmin,
   onGoLeaderboard,
   onGoResults,
@@ -2279,6 +2305,10 @@ function HomeScreen({
     </Text>
   </Pressable>
 )}
+
+<Pressable style={styles.rulesButton} onPress={onGoRules}>
+  <Text style={styles.rulesButtonText}>View Competition Rules</Text>
+</Pressable>
 
         <View style={styles.statsRow}>
           {/* LEFT: Today */}
@@ -3969,6 +3999,78 @@ function LeaderboardScreen({
   );
 }
 
+function RulesScreen({ onBack }) {
+  return (
+    <View style={styles.container}>
+      <ScrollView
+        style={styles.content}
+        contentContainerStyle={{ paddingBottom: FOOTER_HEIGHT + 24 }}
+        showsVerticalScrollIndicator={false}
+      >
+        <Text style={styles.title}>Competition Rules</Text>
+        <Text style={styles.subtitle}>
+          Please read these rules before entering your tips.
+        </Text>
+
+        <Pressable
+          style={[styles.button, styles.buttonPrimary, { marginTop: 14 }]}
+          onPress={onBack}
+        >
+          <Text style={styles.buttonText}>Back to Home</Text>
+        </Pressable>
+
+        <View style={[styles.card, { marginTop: 10 }]}>
+          <Text style={styles.h2}>1. Entry</Text>
+          <Text style={styles.cardHint}>
+            Entry is £10 payable to Ross Soames. Only
+            paid up entrants are eligible for prizes and leaderboard positions.<p>Ross Soames<br></br>
+Sort Code - 070806<br></br>
+Acc No. 07964444<br></br>
+Ref: CC Your Name
+</p>
+          </Text>
+        </View>
+
+        <View style={[styles.card, { marginTop: 10 }]}>
+          <Text style={styles.h2}>2. Scoring</Text>
+          <Text style={styles.cardHint}>
+            You have a virtual £5 each way bet on each race (£10 total per race) per day of the competition. The winnings from each race will be calculated and added to your daily total and overall total without the stake deductions.
+          </Text>
+        </View>
+
+        <View style={[styles.card, { marginTop: 10 }]}>
+          <Text style={styles.h2}>3. Betting rules</Text>
+          <Text style={styles.cardHint}>
+            Place terms as shown on Skybet (Subject to change).<br></br>
+            Non-runners will be assigned the SP favourite.<br></br>
+            Odds shown on the app are indicative prices. Final prices will be taken the SP on Racing Post app/website.
+          </Text>
+        </View>
+
+        <View style={[styles.card, { marginTop: 10 }]}>
+          <Text style={styles.h2}>4. Tipping</Text>
+          <Text style={styles.cardHint}>
+            Tipping for each day will lock at the start of the first race on that day (13:20). Anyone failing to make their picks will be assigned the SP favourite.<br></br>The races for the following day will automatically update at 7pm on the evening before.
+          </Text>
+        </View>
+
+        <View style={[styles.card, { marginTop: 10 }]}>
+          <Text style={styles.h2}>5. Winning</Text>
+          <Text style={styles.cardHint}>
+            Each daily winner will receive a prize and the overall winner will recieve a grand prize. In the event of a tie, the organisers will decide the split fairly.
+          </Text>
+        </View>
+
+        <Pressable
+          style={[styles.button, styles.buttonPrimary, { marginTop: 14 }]}
+          onPress={onBack}
+        >
+          <Text style={styles.buttonText}>Back to Home</Text>
+        </Pressable>
+      </ScrollView>
+    </View>
+  );
+}
 
 function AdminCompetitionHomeScreen({
   competitions,
@@ -6304,6 +6406,25 @@ displayNameAlertLink: {
   fontSize: 14,
   fontWeight: "700",
   color: "#D97706",
+},
+
+rulesButton: {
+  marginTop: 10,
+  marginBottom: 6,
+  marginHorizontal: 16,
+  backgroundColor: "#ffffff",
+  borderRadius: 14,
+  borderWidth: 1,
+  borderColor: THEME.line,
+  paddingVertical: 14,
+  paddingHorizontal: 16,
+  alignItems: "center",
+},
+
+rulesButtonText: {
+  fontSize: 16,
+  fontWeight: "700",
+  color: THEME.text,
 },
 
 });
