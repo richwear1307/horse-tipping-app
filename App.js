@@ -4021,7 +4021,7 @@ function RulesScreen({ onBack }) {
 
         <View style={[styles.card, { marginTop: 10 }]}>
           <Text style={styles.h2}>1. Entry</Text>
-          <Text style={styles.cardHint}>
+          <Text style={styles.rulestext}>
             Entry is £10 payable to Ross Soames. Only
             paid up entrants are eligible for prizes and leaderboard positions.<p>Ross Soames<br></br>
 Sort Code - 070806<br></br>
@@ -4033,14 +4033,14 @@ Ref: CC Your Name
 
         <View style={[styles.card, { marginTop: 10 }]}>
           <Text style={styles.h2}>2. Scoring</Text>
-          <Text style={styles.cardHint}>
+          <Text style={styles.rulestext}>
             You have a virtual £5 each way bet on each race (£10 total per race) per day of the competition. The winnings from each race will be calculated and added to your daily total and overall total without the stake deductions.
           </Text>
         </View>
 
         <View style={[styles.card, { marginTop: 10 }]}>
           <Text style={styles.h2}>3. Betting rules</Text>
-          <Text style={styles.cardHint}>
+          <Text style={styles.rulestext}>
             Place terms as shown on Skybet (Subject to change).<br></br>
             Non-runners will be assigned the SP favourite.<br></br>
             Odds shown on the app are indicative prices. Final prices will be taken the SP on Racing Post app/website.
@@ -4049,14 +4049,14 @@ Ref: CC Your Name
 
         <View style={[styles.card, { marginTop: 10 }]}>
           <Text style={styles.h2}>4. Tipping</Text>
-          <Text style={styles.cardHint}>
+          <Text style={styles.rulestext}>
             Tipping for each day will lock at the start of the first race on that day (13:20). Anyone failing to make their picks will be assigned the SP favourite.<br></br>The races for the following day will automatically update at 7pm on the evening before.
           </Text>
         </View>
 
         <View style={[styles.card, { marginTop: 10 }]}>
           <Text style={styles.h2}>5. Winning</Text>
-          <Text style={styles.cardHint}>
+          <Text style={styles.rulestext}>
             Each daily winner will receive a prize and the overall winner will recieve a grand prize. In the event of a tie, the organisers will decide the split fairly.
           </Text>
         </View>
@@ -6426,5 +6426,11 @@ rulesButtonText: {
   fontWeight: "700",
   color: THEME.text,
 },
+
+rulestext: {
+  fontSize: "12",
+  fontWeight: "500",
+
+}
 
 });
