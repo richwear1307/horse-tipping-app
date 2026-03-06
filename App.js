@@ -1583,26 +1583,29 @@ function AdminEntrantsScreen({
     (competitions ?? []).find((c) => c.id === activeCompetitionId) ?? null;
 
   const rows = useMemo(() => {
-    const list = Object.entries(usersMap ?? {}).map(([uid, u]) => {
-      const displayName = String(u?.displayName ?? "").trim();
-      const registeredIds = Array.isArray(u?.registeredCompetitionIds)
-        ? u.registeredCompetitionIds
-        : [];
+  const list = Object.entries(usersMap ?? {}).map(([uid, u]) => {
+    const displayName = String(u?.displayName ?? "").trim();
+    const username = String(u?.username ?? "").trim();
+    const registeredIds = Array.isArray(u?.registeredCompetitionIds)
+      ? u.registeredCompetitionIds
+      : [];
 
-      return {
-        uid,
-        displayName: displayName || "(No screen name)",
-        sortKey: (displayName || "").toLowerCase(),
-        registered: activeCompetitionId
-          ? registeredIds.includes(activeCompetitionId)
-          : false,
-      };
-    });
+    const nameToShow = displayName || username || "(No screen name)";
 
-    // ✅ alphabetical order
-    list.sort((a, b) => a.sortKey.localeCompare(b.sortKey));
-    return list;
-  }, [usersMap, activeCompetitionId]);
+    return {
+      uid,
+      displayName: nameToShow,
+      sortKey: nameToShow.toLowerCase(),
+      registered: activeCompetitionId
+        ? registeredIds.includes(activeCompetitionId)
+        : false,
+      isPaid: !!u?.isPaid,
+    };
+  });
+
+  list.sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+  return list;
+}, [usersMap, activeCompetitionId]);
 
   const toggleRegistered = async (uid, nextVal) => {
     if (!activeCompetitionId) return;
@@ -1611,15 +1614,12 @@ function AdminEntrantsScreen({
       const userRef = doc(firestoreDb, "users", uid);
 
       if (nextVal) {
-        // ✅ 1) add competition id to user profile
         await setDoc(
           userRef,
           { registeredCompetitionIds: arrayUnion(activeCompetitionId) },
           { merge: true }
         );
 
-        // ✅ 2) create/ensure overall leaderboard doc exists immediately
-        // competitions/{competitionId}/leaderboard/{uid}
         const overallRef = doc(
           firestoreDb,
           "competitions",
@@ -1635,31 +1635,38 @@ function AdminEntrantsScreen({
         await setDoc(
           overallRef,
           {
-            // required for leaderboard query + UI
             totalReturnInclStake: 0,
             tips: 0,
-
-            // tie-breaker fields (optional but recommended)
             createdAt: serverTimestamp(),
             displayNameLower,
-
-            // nice-to-have
             updatedAt: serverTimestamp(),
           },
-          { merge: true } // don't clobber later aggregation writes
+          { merge: true }
         );
       } else {
-        // ✅ remove competition id from user profile
         await setDoc(
           userRef,
           { registeredCompetitionIds: arrayRemove(activeCompetitionId) },
           { merge: true }
         );
-
-        // Note: we intentionally do NOT delete the leaderboard doc.
-        // Your LeaderboardScreen can continue filtering to registered users,
-        // which will hide unregistered users without losing historical data.
       }
+    } catch (e) {
+      showMessage("Save failed", e.message);
+    }
+  };
+
+  const togglePaid = async (uid, nextVal) => {
+    try {
+      const userRef = doc(firestoreDb, "users", uid);
+
+      await setDoc(
+        userRef,
+        {
+          isPaid: nextVal,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
     } catch (e) {
       showMessage("Save failed", e.message);
     }
@@ -1688,13 +1695,45 @@ function AdminEntrantsScreen({
         <View style={{ marginTop: 10, gap: 10 }}>
           {rows.map((r) => (
             <View key={r.uid} style={[styles.card, styles.entrantRow]}>
-              <Text style={styles.cardTitle}>{r.displayName}</Text>
+              <View style={{ flex: 1, paddingRight: 12 }}>
+                <Text style={styles.cardTitle}>{r.displayName}</Text>
+              </View>
 
-              {/* Switch works as checkbox across mobile + web */}
-              <Switch
-                value={r.registered}
-                onValueChange={(val) => toggleRegistered(r.uid, val)}
-              />
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 18 }}>
+                <View style={{ alignItems: "center" }}>
+                  <Text
+                    style={{
+                      fontSize: 12,
+                      color: THEME.text3,
+                      fontWeight: "600",
+                      marginBottom: 4,
+                    }}
+                  >
+                    Registered
+                  </Text>
+                  <Switch
+                    value={r.registered}
+                    onValueChange={(val) => toggleRegistered(r.uid, val)}
+                  />
+                </View>
+
+                <View style={{ alignItems: "center" }}>
+                  <Text
+                    style={{
+                      fontSize: 12,
+                      color: THEME.text3,
+                      fontWeight: "600",
+                      marginBottom: 4,
+                    }}
+                  >
+                    Paid
+                  </Text>
+                  <Switch
+                    value={r.isPaid}
+                    onValueChange={(val) => togglePaid(r.uid, val)}
+                  />
+                </View>
+              </View>
             </View>
           ))}
         </View>
@@ -1865,7 +1904,7 @@ function AuthScreen() {
     <View style={styles.authBg}>
       <View style={styles.heroOverlay}>
         <View style={styles.cardStack}>
-          <View style={styles.heroBadge}>
+          <View style={styles.authBadge}>
             <Text style={styles.heroBadgeIcon}>🔒</Text>
           </View>
 
@@ -3676,6 +3715,7 @@ function LeaderboardScreen({
           ...r,
           displayName:
             usersMap?.[r.userId]?.displayName ||
+            usersMap?.[r.userId]?.username?.trim() ||
             usersMap?.[r.userId]?.email ||
             r.userId,
           gbp: Number(r.totalReturnInclStake ?? 0),
@@ -5159,13 +5199,25 @@ heroBg: {
 },
 
   authCard: {
-    // slightly roomier inset for inputs
-    paddingBottom: 16,
-  },
+  paddingBottom: 16,
+  position: "relative", // allows badge to anchor to the card
+},
 
   authBadge: {
-    backgroundColor: THEME.primary,
-  },
+  position: "absolute",
+  top: -20,
+  left: "50%",
+  transform: [{ translateX: -20 }],
+
+  width: 40,
+  height: 40,
+  borderRadius: 20,
+
+  backgroundColor: THEME.primary,
+  alignItems: "center",
+  justifyContent: "center",
+  zIndex: 2,
+},
 
   authTitle: {
     fontSize: 22,
