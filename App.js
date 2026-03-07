@@ -1059,23 +1059,48 @@ const gbpTotal = useMemo(() => {
 const homeLeaderboard = useMemo(() => {
   const overallRows = overallBoardRows ?? [];
   const dayRows = dayBoardRows ?? [];
+  const registeredIds = registeredUserIds ?? [];
 
-  const overallIndex = overallRows.findIndex((r) => r.userId === user.uid);
-  const dayIndex = dayRows.findIndex((r) => r.userId === user.uid);
+  const overallById = new Map(overallRows.map((r) => [r.userId, r]));
+  const dayById = new Map(dayRows.map((r) => [r.userId, r]));
 
-  const overallRow = overallIndex >= 0 ? overallRows[overallIndex] : null;
-  const dayRow = dayIndex >= 0 ? dayRows[dayIndex] : null;
+  const filledOverallRows = registeredIds.map((uid) => ({
+    userId: uid,
+    totalReturnInclStake: Number(
+      overallById.get(uid)?.totalReturnInclStake ?? 0
+    ),
+  }));
+
+  const filledDayRows = registeredIds.map((uid) => ({
+    userId: uid,
+    totalReturnInclStake: Number(
+      dayById.get(uid)?.totalReturnInclStake ?? 0
+    ),
+  }));
+
+  filledOverallRows.sort(
+    (a, b) => b.totalReturnInclStake - a.totalReturnInclStake
+  );
+  filledDayRows.sort(
+    (a, b) => b.totalReturnInclStake - a.totalReturnInclStake
+  );
+
+  const overallIndex = filledOverallRows.findIndex((r) => r.userId === user.uid);
+  const dayIndex = filledDayRows.findIndex((r) => r.userId === user.uid);
+
+  const overallRow = overallIndex >= 0 ? filledOverallRows[overallIndex] : null;
+  const dayRow = dayIndex >= 0 ? filledDayRows[dayIndex] : null;
 
   return {
     dayRank: dayIndex >= 0 ? dayIndex + 1 : null,
-    dayTotalUsers: dayRows.length,
+    dayTotalUsers: filledDayRows.length,
     dayWinnings: Number(dayRow?.totalReturnInclStake ?? 0),
 
     allRank: overallIndex >= 0 ? overallIndex + 1 : null,
-    allTotalUsers: overallRows.length,
+    allTotalUsers: filledOverallRows.length,
     allWinnings: Number(overallRow?.totalReturnInclStake ?? 0),
   };
-}, [overallBoardRows, dayBoardRows, user.uid]);
+}, [overallBoardRows, dayBoardRows, registeredUserIds, user.uid]);
 
 if (screen === "results") {
   return (
@@ -2596,10 +2621,10 @@ const toggleRace = (raceId) => {
 };
 
   const countWinningTips = (raceId, winnerHorse) => {
-    if (!winnerHorse) return 0;
-    const list = allTips ?? [];
-    return list.filter((t) => t?.raceId === raceId && t?.horseName === winnerHorse).length;
-  };
+  if (!winnerHorse) return 0;
+  const key = `${raceId}__${winnerHorse}`;
+  return Number(resultTipCounts?.[key] ?? 0);
+};
 
   return (
     <View style={styles.container}>
