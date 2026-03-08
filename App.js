@@ -3115,6 +3115,10 @@ function RacesScreen({ races, racesLoading, activeDay, tips, allRaceTipCounts, o
               </View>
             </View>
 
+            <Text style={styles.placesPaidText}>
+  Paying {selectedRace?.placesPaid ?? 0} places
+</Text>
+
             {/* Most tipped pill on its own row (under date, above tips close) */}
             {hotTip?.horseName ? (
               <View style={styles.mostTippedInlineUnder}>
@@ -6550,6 +6554,13 @@ rulesButtonText: {
   fontSize: 16,
   fontWeight: "700",
   color: THEME.text,
+},
+
+placesPaidText: {
+  fontSize: 13,
+  fontWeight: "600",
+  color: "#6B7280",
+  marginBottom: 6,
 },
 
 rulestext: {
