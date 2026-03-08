@@ -896,16 +896,149 @@ exports.settleRaceOnResult = onDocumentWritten(
     const settlementRef = db.collection("raceSettlements").doc(raceId);
 
     if (!after || !after.exists) {
-      await settlementRef.set(
-        {
-          raceId,
-          status: "skipped_no_after",
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        },
-        { merge: true }
-      );
-      return;
+  logger.info(`Result deleted for race ${raceId}. Rolling back previous settlement.`);
+
+  const before = event.data?.before;
+  const previousResult = before?.exists ? before.data() || {} : {};
+
+  const previousCompetitionId = previousResult.competitionId || null;
+
+  // Best-effort day derivation for removing per-day leaderboard contribution
+  let rollbackRaceDay = dayFromRaceId(raceId);
+
+  try {
+    if (!rollbackRaceDay) {
+      const raceSnap = await db.doc(`races/${raceId}`).get();
+      if (raceSnap.exists) {
+        const race = raceSnap.data() || {};
+        rollbackRaceDay = normalizeDayKey(race.date);
+      }
     }
+
+    if (!rollbackRaceDay) {
+      rollbackRaceDay = normalizeDayKey(previousResult.date);
+    }
+  } catch (err) {
+    logger.error(`Failed deriving rollback day for race ${raceId}`, err);
+  }
+
+  const usersSubcolRef = settlementRef.collection("users");
+  const existingSettSnap = await usersSubcolRef.get();
+
+  const writes = [];
+  const compLeaderboardWork = [];
+
+  let usersRolledBack = 0;
+  let tipsRemoved = 0;
+
+  existingSettSnap.forEach((docSnap) => {
+    const d = docSnap.data() || {};
+    const userId = docSnap.id;
+
+    const oldVal = Number(d.totalReturnInclStake ?? 0);
+    const oldProfit = Number(d.totalProfit ?? 0);
+
+    const userAggRef = db.collection("users").doc(userId);
+
+    writes.push((batch) => {
+      if (oldVal !== 0 || oldProfit !== 0) {
+        batch.set(
+          userAggRef,
+          {
+            totalReturnInclStake: admin.firestore.FieldValue.increment(-oldVal),
+            totalProfit: admin.firestore.FieldValue.increment(-oldProfit),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+      }
+
+      batch.delete(docSnap.ref);
+    });
+
+    if (previousCompetitionId) {
+      compLeaderboardWork.push({ userId, raceProfit: 0 });
+    }
+
+    usersRolledBack++;
+    if (oldVal !== 0 || oldProfit !== 0) {
+      tipsRemoved++;
+    }
+  });
+
+  writes.push((batch) => {
+    batch.set(
+      settlementRef,
+      {
+        raceId,
+        competitionId: previousCompetitionId,
+        status: "cleared_no_result",
+        tipsRemoved,
+        usersRolledBack,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        clearedAt: admin.firestore.FieldValue.serverTimestamp(),
+        lockedUntilMs: 0,
+      },
+      { merge: true }
+    );
+  });
+
+  await commitInChunks(writes, 450);
+
+  logger.info(
+    `Rollback complete for deleted result raceId=${raceId} usersRolledBack=${usersRolledBack} competitionId=${previousCompetitionId}`
+  );
+
+  if (previousCompetitionId && compLeaderboardWork.length > 0) {
+    const settlementSnap = await settlementRef.get();
+    const settlementData = settlementSnap.exists ? settlementSnap.data() || {} : {};
+    const rollbackVersion = Number(settlementData.settlementVersion ?? 0) + 1;
+
+    await settlementRef.set(
+      {
+        settlementVersion: rollbackVersion,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    for (const item of compLeaderboardWork) {
+      try {
+        await upsertCompetitionLeaderboardDeterministic({
+          db,
+          competitionId: previousCompetitionId,
+          userId: item.userId,
+          raceId,
+          raceReturn: 0,
+          settlementVersion: rollbackVersion,
+        });
+
+        if (rollbackRaceDay) {
+          await upsertCompetitionLeaderboardDayDeterministic({
+            db,
+            competitionId: previousCompetitionId,
+            day: rollbackRaceDay,
+            userId: item.userId,
+            raceId,
+            raceReturn: 0,
+            settlementVersion: rollbackVersion,
+          });
+        }
+      } catch (err) {
+        logger.error(
+          `Rollback leaderboard update failed competitionId=${previousCompetitionId} raceId=${raceId} userId=${item.userId}`,
+          err
+        );
+      }
+    }
+
+    logger.info(
+      `Rollback leaderboard zeroing complete competitionId=${previousCompetitionId} raceId=${raceId} users=${compLeaderboardWork.length}`
+    );
+  }
+
+  return;
+}
 
     const result = after.data();
 

@@ -999,19 +999,33 @@ useEffect(() => {
   let cancelled = false;
 
   const loadRaceTipCounts = async () => {
-    try {
-      const raceIdsForDay = (visibleRaces || [])
-        .filter((r) => r.date === activeDay)
-        .map((r) => r.id)
-        .filter(Boolean);
+  try {
+    const raceIdsForDay = (visibleRaces || [])
+      .filter((r) => r.date === activeDay)
+      .map((r) => r.id)
+      .filter(Boolean);
 
-      if (!raceIdsForDay.length) {
-        if (!cancelled) setAllRaceTipCounts({});
-        return;
-      }
+    if (!raceIdsForDay.length) {
+      if (!cancelled) setAllRaceTipCounts({});
+      return;
+    }
 
-      const snap = await getDocs(collection(firestoreDb, "tips"));
-      const next = {};
+    const chunkSize = 10;
+    const raceIdChunks = [];
+
+    for (let i = 0; i < raceIdsForDay.length; i += chunkSize) {
+      raceIdChunks.push(raceIdsForDay.slice(i, i + chunkSize));
+    }
+
+    const next = {};
+
+    for (const chunk of raceIdChunks) {
+      const q = query(
+        collection(firestoreDb, "tips"),
+        where("raceId", "in", chunk)
+      );
+
+      const snap = await getDocs(q);
 
       snap.docs.forEach((docSnap) => {
         const t = docSnap.data() || {};
@@ -1019,21 +1033,21 @@ useEffect(() => {
         const horseName = String(t.horseName || "").trim();
 
         if (!raceId || !horseName) return;
-        if (!raceIdsForDay.includes(raceId)) return;
 
         if (!next[raceId]) next[raceId] = {};
         next[raceId][horseName] = (next[raceId][horseName] || 0) + 1;
       });
-
-      if (!cancelled) {
-        setAllRaceTipCounts(next);
-      }
-    } catch (err) {
-      if (!cancelled) {
-        showMessage("Race tip counts load error", err.message);
-      }
     }
-  };
+
+    if (!cancelled) {
+      setAllRaceTipCounts(next);
+    }
+  } catch (err) {
+    if (!cancelled) {
+      showMessage("Race tip counts load error", err.message);
+    }
+  }
+};
 
   loadRaceTipCounts();
 
