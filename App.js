@@ -2406,19 +2406,15 @@ function HomeScreen({
   TOTAL PRIZE POT FOR THE COMPETITION
 </Text>
 
-<Text style={styles.heroHeadlineMain}>£230</Text>
+<Text style={styles.heroHeadlineMain}>£240</Text>
 <Text style={styles.heroHeadlineLabel}>OVERALL WINNER</Text>
 
 <View style={styles.heroPrizeDivider} />
 
 <View style={styles.heroSecondaryPrizeBlock}>
   <Text style={styles.heroSecondaryPrize}>Runner-up £50</Text>
-  <Text style={styles.heroSecondaryPrize}>Daily winner £35</Text>
+  <Text style={styles.heroSecondaryPrize}>Daily winner £40</Text>
 </View>
-
-<Text style={styles.heroSub}>
-  We will confirm total payouts once we have a confirmed amount of entries.
-</Text>
 
                 <AnimatedPressable
                   onPress={onGoRaces}
@@ -2439,7 +2435,7 @@ function HomeScreen({
                       { transform: [{ translateX: sheenX }, { rotate: "20deg" }] },
                     ]}
                   />
-                  <Text style={styles.heroCtaText}>TAP TO MAKE YOUR PICKS FOR DAY 1</Text>
+                  <Text style={styles.heroCtaText}>PICKS FOR DAY 1 ARE CLOSED</Text>
                 </AnimatedPressable>
               </View>
             </View>

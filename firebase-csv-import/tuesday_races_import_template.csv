@@ -1,8 +1,28 @@
-docId,competitionId,date,lockAt,name,meeting,placesPaid,eachWayFraction,offTime,order,raceId,runners,updatedAt
-2026-03-10_chelt_13:20,cheltenham_2026,10/03/2026,2026-03-10T13:20:00Z,Skybet Supreme Novices' Hurdle,chelt,4,0.2,2026-02-28T13:20:00Z,1,2026-03-10_chelt_13:20,"[""baron_noir"",""eachtotheirown"",""el_cairos"",""koktail_brut"",""leader_d'allier"",""mighty_park"",""mydaddypaddy"",""old_park_star"",""sageborough"",""sober_glory"",""talk_the_talk"",""too_bossy_for_us""]",2026-03-06T00:00:00Z
-2026-03-10_chelt_14:00,cheltenham_2026,10/03/2026,2026-03-10T13:20:00Z,Singer Arkle Challenge Trophy Novices' Chase,chelt,2,0.25,2026-02-28T14:00:00Z,2,2026-03-10_chelt_14:00,"[""hansard"",""jax_junior"",""kargese"",""kopek_des_bordes"",""lulamba"",""mambonumberfive"",""steel_ally""]",2026-03-06T00:00:00Z
-2026-03-10_chelt_14:40,cheltenham_2026,10/03/2026,2026-03-10T13:20:00Z,McCoy Contractors Juvenile Handicap Hurdle,chelt,6,0.2,2026-02-28T14:20:00Z,3,2026-03-10_chelt_14:40,"[""ammes"",""bandjo"",""barbizon"",""bertutea"",""bibe_mus"",""dignam"",""glen_to_glen"",""hardy_stuff"",""harwa"",""klycot"",""lord"",""macktoad"",""madness_d'elle"",""manlaga"",""mino_des_mottes"",""munsif"",""mustang_du_breuil"",""ole_ole"",""paddockwood"",""pourquoi_pas_papa"",""quinta_do_lago"",""saratoga"",""the_mighty_celt"",""winston_junior""]",2026-03-06T00:00:00Z
-2026-03-10_chelt_15:20,cheltenham_2026,10/03/2026,2026-03-10T13:20:00Z,Trustmarque Ultima Handicap Chase,chelt,7,0.2,2026-02-28T15:20:00Z,4,2026-03-10_chelt_15:20,"[""blaze_the_way"",""blow_your_wad"",""eyed"",""filanderer"",""handstands"",""hyland"",""imperial_saint"",""iroko"",""jagwar"",""johnnywho"",""knight_of_allen"",""konfusion"",""leave_of_absence"",""margaret’s_legacy"",""myretown"",""patter_merchant"",""quebecois"",""resplendent_grey"",""search_for_glory"",""stolen_silver"",""the_doyen_chief"",""the_short_go""]",2026-03-06T00:00:00Z
-2026-03-10_chelt_16:00,cheltenham_2026,10/03/2026,2026-03-10T13:20:00Z,Unibet Champion Hurdle Challenge Trophy,chelt,3,0.2,2026-02-28T16:00:00Z,5,2026-03-10_chelt_16:00,"[""alexei"",""anzadam"",""brighterdaysahead"",""golden_ace"",""lossiemouth"",""poniros"",""the_new_lion"",""tutti_quanti"",""workahead""]",2026-03-06T00:00:00Z
-2026-03-10_chelt_16:40,cheltenham_2026,10/03/2026,2026-03-10T13:20:00Z,Sun Racing Plate Handicap Chase,chelt,6,0.2,2026-02-28T16:40:00Z,6,2026-03-10_chelt_16:40,"[""dee_capo"",""down_memory_lane"",""no_questions_asked"",""jungle_boogie"",""boombawn"",""downmexicoway"",""guard_your_dreams"",""o'moore_park"",""booster_bob"",""madara"",""peaky_boy"",""will_the_wise"",""riskintheground"",""midnight_it_is"",""zurich"",""jipcot"",""mclaurey"",""theatre_native"",""western_zephyr"",""grandeur_d'ame"",""embittered"",""moon_d'orange"",""yes_indeed""]",2026-03-06T00:00:00Z
-2026-03-10_chelt_17:20,cheltenham_2026,10/03/2026,2026-03-10T13:20:00Z,National Hunt Challenge Cup Novices' Handicap Chase,chelt,5,0.2,2026-02-28T17:20:00Z,7,2026-03-10_chelt_17:20,"[""wade_out"",""pic_roc"",""king_of_answers"",""one_big_bang"",""kurasso_blue"",""will_do"",""guard_the_moon"",""grand_geste"",""backmersackme"",""holloway_queen"",""iceberg_theory"",""newton_tornado"",""first_confession"",""union_station"",""walking_on_air"",""silver_thorn"",""holokea""]",2026-03-06T00:00:00Z
+,,,, Club ,Daily,, 2nd , 1st 
+TOTAL,60,£600.00,£600.00, £250.00 ,£120.00,4.00, £50.00 , £180.00 
+,70,£700.00,£700.00, £310.00 ,£140.00,4.00, £50.00 , £200.00 
+,75,£750.00,£750.00, £310.00 ,£160.00,, £50.00 , £230.00 
+,80,£800.00,£800.00, £350.00 ,£160.00,4.00, £50.00 , £240.00 
+,90,£900.00,£900.00, £400.00 ,£200.00,4.00, £50.00 , £250.00 
+,,,,,,4.00,,
+,,,,,,4.00,,
+,,,,,,4.00,,
+,,,,,,4.00,,
+,,,,,,4.00,,
+,,,,,,4.00,,
+,,,,,,4.00,,
+,,,,,,4.00,,
+,,,,,,4.00,,
+,,,,,,4.00,,
+,,,,,,4.00,,
+,,,,,,4.00,,
+,,,,,,4.00,,
+,,,,,,4.00,,
+,,,,,,4.00,,
+,,,,,,4.00,,
+,,,,,,4.00,,
+,,,,,,4.00,,
+,,,,,,4.00,,
+,,,,,,4.00,,
+,,,,,,4.00,,
+,,,,,,4.00,,
