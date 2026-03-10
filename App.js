@@ -2435,7 +2435,7 @@ function HomeScreen({
                       { transform: [{ translateX: sheenX }, { rotate: "20deg" }] },
                     ]}
                   />
-                  <Text style={styles.heroCtaText}>PICKS FOR DAY 1 ARE CLOSED</Text>
+                  <Text style={styles.heroCtaText}>PICKS FOR DAY 2  FROM 6PM</Text>
                 </AnimatedPressable>
               </View>
             </View>
@@ -4185,7 +4185,7 @@ Ref: CC Your Name
         <View style={[styles.card, { marginTop: 10 }]}>
           <Text style={styles.h2}>2. Scoring</Text>
           <Text style={styles.rulestext}>
-            You have a virtual £5 each way bet on each race (£10 total per race) per day of the competition. The winnings from each race will be calculated and added to your daily total and overall total without the stake deductions.
+            You have a virtual £5 each way bet on each race (£10 total per race) per day of the competition. The winnings from each race will be calculated and added to your daily total and overall total without the stake returns.
           </Text>
         </View>
 
@@ -4201,7 +4201,7 @@ Ref: CC Your Name
         <View style={[styles.card, { marginTop: 10 }]}>
           <Text style={styles.h2}>4. Tipping</Text>
           <Text style={styles.rulestext}>
-            Tipping for each day will lock at the start of the first race on that day (13:20). Anyone failing to make their picks will be assigned the SP favourite.<br></br>The races for the following day will automatically update at 7pm on the evening before.
+            Tipping for each day will lock at the start of the first race on that day (13:20). Anyone failing to make their picks will be assigned the SP favourite.<br></br>The races for the following day will automatically update at 6pm on the evening before.
           </Text>
         </View>
 
