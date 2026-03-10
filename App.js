@@ -2403,13 +2403,22 @@ function HomeScreen({
                 </View>
 
                 <Text style={styles.heroKicker}>
-                  TOTAL PRIZE POT FOR THE COMPETITION
-                </Text>
-                <Text style={styles.heroHeadline}>£- DAILY</Text>
-                <Text style={styles.heroHeadline}>£- OVERALL</Text>
-                <Text style={styles.heroSub}>
-                  We will confirm total payouts once we have a confirmed amount of entries.
-                </Text>
+  TOTAL PRIZE POT FOR THE COMPETITION
+</Text>
+
+<Text style={styles.heroHeadlineMain}>£230</Text>
+<Text style={styles.heroHeadlineLabel}>OVERALL WINNER</Text>
+
+<View style={styles.heroPrizeDivider} />
+
+<View style={styles.heroSecondaryPrizeBlock}>
+  <Text style={styles.heroSecondaryPrize}>Runner-up £50</Text>
+  <Text style={styles.heroSecondaryPrize}>Daily winner £35</Text>
+</View>
+
+<Text style={styles.heroSub}>
+  We will confirm total payouts once we have a confirmed amount of entries.
+</Text>
 
                 <AnimatedPressable
                   onPress={onGoRaces}
@@ -6595,6 +6604,44 @@ autoAssignedNote: {
   borderRadius: 6,
   marginTop: 4,
   alignSelf: "flex-start",
+},
+
+heroHeadlineMain: {
+  fontSize: 54,
+  fontWeight: "900",
+  color: "#f59e0b",
+  textAlign: "center",
+  lineHeight: 58,
+  marginTop: 6,
+},
+
+heroHeadlineLabel: {
+  fontSize: 20,
+  fontWeight: "800",
+  color: THEME.text,
+  textAlign: "center",
+  letterSpacing: 0.8,
+  marginTop: 2,
+},
+
+heroPrizeDivider: {
+  height: 1,
+  backgroundColor: "rgba(0,0,0,0.08)",
+  alignSelf: "stretch",
+  marginVertical: 16,
+},
+
+heroSecondaryPrizeBlock: {
+  gap: 8,
+  alignItems: "center",
+  marginBottom: 10,
+},
+
+heroSecondaryPrize: {
+  fontSize: 22,
+  fontWeight: "800",
+  color: "#6b7280",
+  textAlign: "center",
 },
 
 });
