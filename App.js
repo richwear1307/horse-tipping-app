@@ -3573,7 +3573,8 @@ const myTipsForDay = useMemo(() => {
         }
         renderItem={({ item: race }) => {
           const myTip = myTipByRaceId[race.id];
-          const picked = !!myTip?.horseName;
+          console.log("MYTIP DEBUG", race.id, myTip);
+          const picked = !!myTip;
           const settle = settlementByRaceId?.[race.id] || null;
           const swapApplied =
             !!settle?.wasNonRunnerSwap &&
@@ -3618,42 +3619,44 @@ const myTipsForDay = useMemo(() => {
             </Text>
           </View>
 
-          {/* CENTER: horse name (or “no tip” message) */}
+{/* CENTER: horse name (or “no tip” message) */}
 <View style={styles.runnerCenter}>
-  {/* Horse name (or no-tip message) */}
+
+  {/* Horse name or no-tip message */}
   <Text style={styles.runnerName} numberOfLines={1}>
-    {picked ? myTip.horseName : "No tip submitted for this race yet"}
+    {picked ? myTip?.horseName : "No tip submitted for this race yet"}
   </Text>
 
-{/* Jockey + Trainer */}
-{(runner?.jockey || runner?.trainer) ? (
-  <View style={styles.runnerMetaRow}>
-    {runner?.jockey ? (
-      <View style={styles.metaGroup}>
-        <Text style={styles.metaBadge}>J</Text>
-        <Text style={styles.runnerMetaText} numberOfLines={1}>
-          {runner.jockey}
-        </Text>
-      </View>
-    ) : null}
-
-    {runner?.trainer ? (
-      <View style={styles.metaGroup}>
-        <Text style={styles.metaBadge}>T</Text>
-        <Text style={styles.runnerMetaText} numberOfLines={1}>
-          {runner.trainer}
-        </Text>
-      </View>
-    ) : null}
-  </View>
-) : null}
-
-  {/* ✅ Settlement-only notice: non-runner swap applied */}
-  {picked && swapApplied ? (
-    <Text style={[styles.runnerMetaLineSingle, { marginTop: 2 }]} numberOfLines={2}>
-      {`⚠️ Non-runner: tip swapped to favourite (${swappedToName})`}
+  {/* Auto-assigned favourite notice */}
+  {picked && myTip?.autoAssigned && (
+    <Text style={styles.autoAssignedNote}>
+      No tip entered — favourite has been assigned
     </Text>
+  )}
+
+  {/* Jockey + Trainer */}
+  {picked && runner && (runner?.jockey || runner?.trainer) ? (
+    <View style={styles.runnerMetaRow}>
+      {runner?.jockey && (
+        <View style={styles.metaGroup}>
+          <Text style={styles.metaBadge}>J</Text>
+          <Text style={styles.runnerMetaText} numberOfLines={1}>
+            {runner.jockey}
+          </Text>
+        </View>
+      )}
+
+      {runner?.trainer && (
+        <View style={styles.metaGroup}>
+          <Text style={styles.metaBadge}>T</Text>
+          <Text style={styles.runnerMetaText} numberOfLines={1}>
+            {runner.trainer}
+          </Text>
+        </View>
+      )}
+    </View>
   ) : null}
+
 </View>
 
           {/* RIGHT: odds box */}
@@ -6578,9 +6581,20 @@ placesPaidText: {
 },
 
 rulestext: {
-  fontSize: "12",
-  fontWeight: "500",
+  fontSize: "16",
+  fontWeight: "700",
 
-}
+},
+
+autoAssignedNote: {
+  fontSize: 11,
+  color: "#b45309",
+  backgroundColor: "#fef3c7",
+  paddingHorizontal: 6,
+  paddingVertical: 2,
+  borderRadius: 6,
+  marginTop: 4,
+  alignSelf: "flex-start",
+},
 
 });

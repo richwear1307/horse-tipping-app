@@ -1031,13 +1031,33 @@ exports.settleRaceOnResult = onDocumentWritten(
         );
       }
     }
+  }
+// REMOVE AUTO-ASSIGNED TIPS
+try {
+  const autoTipsSnap = await db
+    .collection("tips")
+    .where("raceId", "==", raceId)
+    .where("autoAssigned", "==", true)
+    .get();
+
+  if (!autoTipsSnap.empty) {
+    const batch = db.batch();
+
+    autoTipsSnap.forEach((docSnap) => {
+      batch.delete(docSnap.ref);
+    });
+
+    await batch.commit();
 
     logger.info(
-      `Rollback leaderboard zeroing complete competitionId=${previousCompetitionId} raceId=${raceId} users=${compLeaderboardWork.length}`
+      `Removed ${autoTipsSnap.size} auto-assigned tips for race ${raceId}`
     );
   }
+} catch (err) {
+  logger.error(`Failed removing auto-assigned tips for race ${raceId}`, err);
+}
 
-  return;
+return;
 }
 
     const result = after.data();
@@ -1251,12 +1271,89 @@ exports.settleRaceOnResult = onDocumentWritten(
       oldByUserId.set(doc.id, { oldVal, oldProfit, docRef: doc.ref, data: d });
     });
 
-    const tipsSnap = await db
+    let tipsSnap = await db
       .collection("tips")
       .where("raceId", "==", raceId)
       .get();
 
     logger.info(`Found ${tipsSnap.size} tips for race ${raceId}`);
+
+// ----------------------------------------------------
+// AUTO-ASSIGN FAVOURITE TO USERS WITH NO SELECTION
+// ----------------------------------------------------
+
+if (competitionId && favouriteHorseId) {
+
+  const usersSnap = await db.collection("users").get();
+
+  const registeredUsers = usersSnap.docs.filter((doc) => {
+    const u = doc.data() || {};
+    const comps = Array.isArray(u.registeredCompetitionIds)
+      ? u.registeredCompetitionIds
+      : [];
+    return comps.includes(competitionId);
+  });
+
+  const existingTipUsers = new Set();
+
+  tipsSnap.forEach((doc) => {
+    const tip = doc.data() || {};
+    if (tip.userId) {
+      existingTipUsers.add(String(tip.userId));
+    }
+  });
+
+  const batch = db.batch();
+  let autoAssignedCount = 0;
+
+const raceSnap = await db.doc(`races/${raceId}`).get();
+const race = raceSnap.exists ? raceSnap.data() || {} : {};
+
+for (const userDoc of registeredUsers) {
+  const user = userDoc.data() || {};
+  const uid = userDoc.id;
+
+  if (existingTipUsers.has(uid)) continue;
+
+  const tipRef = db.collection("tips").doc(`${uid}_${raceId}`);
+
+  batch.set(
+    tipRef,
+    {
+      userId: uid,
+      userEmail: String(user.email ?? ""),
+      raceId,
+      raceName: String(race.name ?? ""),
+      date: String(raceId).slice(0, 10),
+      horseId: favouriteHorseId,
+      horseName: favouriteHorseName,
+      odds: String(result.favouriteOdds ?? ""),
+      lockAt: Number(race.lockAt ?? 0),
+      autoAssigned: true,
+      autoAssignedReason: "no_selection_assigned_favourite",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    },
+    { merge: true }
+  );
+
+  autoAssignedCount++;
+}
+
+  if (autoAssignedCount > 0) {
+    await batch.commit();
+
+    logger.info(`Auto-assigned favourite to ${autoAssignedCount} users for race ${raceId}`);
+
+    // 🔁 IMPORTANT: reload tips so settlement sees them
+    tipsSnap = await db
+      .collection("tips")
+      .where("raceId", "==", raceId)
+      .get();
+
+    logger.info(`Tips after auto-assignment: ${tipsSnap.size}`);
+  }
+}
 
     // ✅ marker if no tips — you will see it in Firestore
     if (tipsSnap.size === 0) {
