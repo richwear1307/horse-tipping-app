@@ -605,6 +605,337 @@ exports.adminResetUserPin = onCall(
   }
 );
 
+exports.listCompetitionEntries = onCall(
+  { region: "europe-west2", cors: true },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Login required");
+    }
+
+    const db = admin.firestore();
+
+    const adminSnap = await db.collection("users").doc(request.auth.uid).get();
+    const adminData = adminSnap.data() || {};
+    if (!adminData.isAdmin) {
+      throw new HttpsError("permission-denied", "Admin only");
+    }
+
+    const competitionId = String(request.data?.competitionId || "").trim();
+    if (!competitionId) {
+      throw new HttpsError("invalid-argument", "competitionId required");
+    }
+
+    const usersSnap = await db.collection("users").get();
+
+    const rows = usersSnap.docs
+      .map((docSnap) => {
+        const d = docSnap.data() || {};
+        const registeredCompetitionIds = Array.isArray(d.registeredCompetitionIds)
+          ? d.registeredCompetitionIds
+          : [];
+
+        if (!registeredCompetitionIds.includes(competitionId)) return null;
+
+        return {
+          uid: docSnap.id,
+          username: String(d.username || "").trim(),
+          email: String(d.email || "").trim(),
+          displayName: String(d.displayName || "").trim(),
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => String(a.username).localeCompare(String(b.username)));
+
+    return {
+      ok: true,
+      type: "entries",
+      title: `Competition entries (${rows.length})`,
+      count: rows.length,
+      rows,
+    };
+  }
+);
+
+exports.missingTips = onCall(
+  { region: "europe-west2", cors: true },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Login required");
+    }
+
+    const db = admin.firestore();
+
+    const adminSnap = await db.collection("users").doc(request.auth.uid).get();
+    const adminData = adminSnap.data() || {};
+    if (!adminData.isAdmin) {
+      throw new HttpsError("permission-denied", "Admin only");
+    }
+
+    const competitionId = String(request.data?.competitionId || "").trim();
+    const raceId = String(request.data?.raceId || "").trim();
+
+    if (!competitionId || !raceId) {
+      throw new HttpsError(
+        "invalid-argument",
+        "competitionId and raceId required"
+      );
+    }
+
+    const usersSnap = await db.collection("users").get();
+    const registeredUsers = usersSnap.docs.filter((docSnap) => {
+      const d = docSnap.data() || {};
+      const registeredCompetitionIds = Array.isArray(d.registeredCompetitionIds)
+        ? d.registeredCompetitionIds
+        : [];
+      return registeredCompetitionIds.includes(competitionId);
+    });
+
+    const tipsSnap = await db
+      .collection("tips")
+      .where("raceId", "==", raceId)
+      .get();
+
+    const tippedUserIds = new Set(
+      tipsSnap.docs
+        .map((docSnap) => String(docSnap.data()?.userId || "").trim())
+        .filter(Boolean)
+    );
+
+    const rows = registeredUsers
+      .map((docSnap) => {
+        const d = docSnap.data() || {};
+        if (tippedUserIds.has(docSnap.id)) return null;
+
+        return {
+          uid: docSnap.id,
+          username: String(d.username || "").trim(),
+          email: String(d.email || "").trim(),
+          displayName: String(d.displayName || "").trim(),
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => String(a.username).localeCompare(String(b.username)));
+
+    return {
+      ok: true,
+      type: "missingTips",
+      title: `Missing tips (${rows.length})`,
+      count: rows.length,
+      raceId,
+      competitionId,
+      rows,
+    };
+  }
+);
+
+exports.listRaceTips = onCall(
+  { region: "europe-west2", cors: true },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Login required");
+    }
+
+    const db = admin.firestore();
+
+    const adminSnap = await db.collection("users").doc(request.auth.uid).get();
+    const adminData = adminSnap.data() || {};
+    if (!adminData.isAdmin) {
+      throw new HttpsError("permission-denied", "Admin only");
+    }
+
+    const competitionId = String(request.data?.competitionId || "").trim();
+    const raceId = String(request.data?.raceId || "").trim();
+
+    if (!competitionId || !raceId) {
+      throw new HttpsError(
+        "invalid-argument",
+        "competitionId and raceId are required"
+      );
+    }
+
+    const usersSnap = await db.collection("users").get();
+
+    const registeredUsers = usersSnap.docs
+      .map((doc) => ({ id: doc.id, ...doc.data() }))
+      .filter((u) => {
+        const ids = Array.isArray(u.registeredCompetitionIds)
+          ? u.registeredCompetitionIds
+          : [];
+        return ids.includes(competitionId);
+      });
+
+    const registeredById = new Map(
+      registeredUsers.map((u) => [
+        u.id,
+        {
+          userId: u.id,
+          displayName: String(u.displayName || u.username || "").trim(),
+          email: String(u.email || "").trim(),
+        },
+      ])
+    );
+
+    const tipsSnap = await db
+      .collection("tips")
+      .where("raceId", "==", raceId)
+      .get();
+
+    const tipsByUserId = new Map();
+    tipsSnap.forEach((doc) => {
+      const t = doc.data() || {};
+      const userId = String(t.userId || "").trim();
+      if (!userId) return;
+
+      tipsByUserId.set(userId, {
+        horseName: String(t.horseName || "").trim(),
+        horseId: String(t.horseId || "").trim(),
+        odds: String(t.odds || "").trim(),
+        autoAssigned: !!t.autoAssigned,
+        autoAssignedReason: String(t.autoAssignedReason || "").trim(),
+        date: String(t.date || "").trim(),
+        raceName: String(t.raceName || "").trim(),
+      });
+    });
+
+    const raceSnap = await db.collection("races").doc(raceId).get();
+    const race = raceSnap.exists ? raceSnap.data() || {} : {};
+
+    const rows = registeredUsers
+      .map((u) => {
+        const base = registeredById.get(u.id);
+        const tip = tipsByUserId.get(u.id);
+
+        return {
+          userId: base.userId,
+          displayName: base.displayName || "(No display name)",
+          email: base.email || "",
+          hasTip: !!tip,
+          horseName: tip?.horseName || "",
+          odds: tip?.odds || "",
+          autoAssigned: !!tip?.autoAssigned,
+          autoAssignedReason: tip?.autoAssignedReason || "",
+        };
+      })
+      .sort((a, b) => a.displayName.localeCompare(b.displayName));
+
+    return {
+      ok: true,
+      type: "listRaceTips",
+      title: `Race tips (${rows.length})`,
+      competitionId,
+      raceId,
+      raceName: String(race.name || "").trim(),
+      raceDate: String(race.date || "").trim(),
+      count: rows.length,
+      rows,
+    };
+  }
+);
+
+exports.listRaceTipsHorse = onCall(
+  { region: "europe-west2", cors: true },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Login required");
+    }
+
+    const db = admin.firestore();
+
+    const adminSnap = await db.collection("users").doc(request.auth.uid).get();
+    const adminData = adminSnap.data() || {};
+    if (!adminData.isAdmin) {
+      throw new HttpsError("permission-denied", "Admin only");
+    }
+
+    const competitionId = String(request.data?.competitionId || "").trim();
+    const raceId = String(request.data?.raceId || "").trim();
+
+    if (!competitionId || !raceId) {
+      throw new HttpsError(
+        "invalid-argument",
+        "competitionId and raceId are required"
+      );
+    }
+
+    const usersSnap = await db.collection("users").get();
+
+    const registeredUsers = usersSnap.docs
+      .map((doc) => ({ id: doc.id, ...doc.data() }))
+      .filter((u) => {
+        const ids = Array.isArray(u.registeredCompetitionIds)
+          ? u.registeredCompetitionIds
+          : [];
+        return ids.includes(competitionId);
+      });
+
+    const registeredUserIds = new Set(registeredUsers.map((u) => u.id));
+
+    const userDisplayNameById = new Map(
+      registeredUsers.map((u) => [
+        u.id,
+        String(u.displayName || u.username || u.email || u.id).trim(),
+      ])
+    );
+
+    const tipsSnap = await db
+      .collection("tips")
+      .where("raceId", "==", raceId)
+      .get();
+
+    const horseMap = new Map();
+
+    tipsSnap.forEach((doc) => {
+      const t = doc.data() || {};
+      const userId = String(t.userId || "").trim();
+
+      if (!registeredUserIds.has(userId)) return;
+
+      const horseName = String(t.horseName || "").trim() || "(Unknown horse)";
+      const odds = String(t.odds || "").trim();
+      const key = `${horseName}|||${odds}`;
+
+      if (!horseMap.has(key)) {
+        horseMap.set(key, {
+          horseName,
+          odds,
+          usernames: [],
+        });
+      }
+
+      horseMap.get(key).usernames.push(
+        userDisplayNameById.get(userId) || userId
+      );
+    });
+
+    const rows = Array.from(horseMap.values())
+      .map((row) => ({
+        ...row,
+        usernames: row.usernames.sort((a, b) => a.localeCompare(b)),
+        count: row.usernames.length,
+      }))
+      .sort((a, b) => {
+        if (a.horseName !== b.horseName) {
+          return a.horseName.localeCompare(b.horseName);
+        }
+        return a.odds.localeCompare(b.odds);
+      });
+
+    const raceSnap = await db.collection("races").doc(raceId).get();
+    const race = raceSnap.exists ? raceSnap.data() || {} : {};
+
+    return {
+      ok: true,
+      type: "listRaceTipsHorse",
+      title: `Race tips by horse (${rows.length})`,
+      competitionId,
+      raceId,
+      raceName: String(race.name || "").trim(),
+      count: rows.length,
+      rows,
+    };
+  }
+);
+
 // -----------------------------------------------------------------------------
 // ✅ Seed overall leaderboard entry as soon as a user is registered
 // -----------------------------------------------------------------------------

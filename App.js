@@ -550,6 +550,7 @@ function GameApp({ user }) {
   adminCompetitionHome: "Admin – Competition Home",
   adminEnterResults: "Admin – Enter Results",
   adminEntrants: "Admin – Manage Entrants",
+  adminScriptRunner: "Admin Script Runner",
 };
   const [selectedRaceId, setSelectedRaceId] = useState(null);
   const [prefillHorse, setPrefillHorse] = useState(null);
@@ -1534,6 +1535,35 @@ if (screen === "adminSelectCompetition") {
   );
 }
 
+if (screen === "adminScriptRunner") {
+  return (
+    <View style={{ flex: 1, paddingBottom: FOOTER_HEIGHT }}>
+      <TopBar
+        onLogout={() => signOut(auth)}
+        onProfile={() => setScreen("profile")}
+        onAdmin={isAdmin ? () => setScreen("adminSelectCompetition") : null}
+      />
+
+      <AdminScriptRunnerScreen
+  activeCompetitionId={activeCompetitionId}
+  competitions={competitions}
+  races={visibleRaces}
+  activeDay={activeDay}
+  onBack={() => setScreen("adminCompetitionHome")}
+/>
+
+      <FooterBar
+        active={activeTab}
+        onGoHome={() => setScreen("home")}
+        onGoRaces={() => setScreen("races")}
+        onGoMyTips={() => setScreen("myTips")}
+        onGoLeaderboard={() => setScreen("leaderboard")}
+        onGoResults={() => setScreen("results")}
+      />
+    </View>
+  );
+}
+
 if (screen === "adminCompetitionHome") {
   return (
     <View style={{ flex: 1, paddingBottom: FOOTER_HEIGHT }}>
@@ -1544,12 +1574,13 @@ if (screen === "adminCompetitionHome") {
       />
 
       <AdminCompetitionHomeScreen
-        competitions={competitions}
-        activeCompetitionId={activeCompetitionId}
-        onEnterResults={() => setScreen("adminEnterResults")}
-        onManageEntrants={() => setScreen("adminEntrants")}
-        onBack={() => setScreen("adminSelectCompetition")}
-      />
+  competitions={competitions}
+  activeCompetitionId={activeCompetitionId}
+  onEnterResults={() => setScreen("adminEnterResults")}
+  onManageEntrants={() => setScreen("adminEntrants")}
+  onOpenScriptRunner={() => setScreen("adminScriptRunner")}
+  onBack={() => setScreen("adminSelectCompetition")}
+/>
 
       <FooterBar
         active={activeTab}
@@ -4228,6 +4259,7 @@ function AdminCompetitionHomeScreen({
   activeCompetitionId,
   onEnterResults,
   onManageEntrants,
+  onOpenScriptRunner,
   onBack,
 }) {
   const [resetUsername, setResetUsername] = useState("");
@@ -4304,7 +4336,18 @@ function AdminCompetitionHomeScreen({
       setNewPin("");
       setUsernameSuggestions([]);
     } catch (e) {
-      showMessage("Reset failed", e?.message || "Unknown error");
+      showMessage(
+        "Reset failed",
+        JSON.stringify(
+          {
+            code: e?.code,
+            message: e?.message,
+            details: e?.details,
+          },
+          null,
+          2
+        )
+      );
     } finally {
       setLoading(false);
     }
@@ -4341,6 +4384,14 @@ function AdminCompetitionHomeScreen({
           disabled={!activeCompetitionId}
         >
           <Text style={styles.buttonText}>Manage entrants</Text>
+        </Pressable>
+
+        <Pressable
+          style={[styles.button, { marginTop: 10 }]}
+          onPress={onOpenScriptRunner}
+          disabled={!activeCompetitionId}
+        >
+          <Text style={styles.buttonText}>Run admin scripts</Text>
         </Pressable>
 
         <View style={[styles.card, { marginTop: 16 }]}>
@@ -4400,6 +4451,388 @@ function AdminCompetitionHomeScreen({
         </Pressable>
       </View>
     </View>
+  );
+}
+
+function AdminScriptRunnerScreen({
+  activeCompetitionId,
+  races,
+  activeDay,
+  competitions,
+  onBack,
+}) {
+  const [selectedTool, setSelectedTool] = useState("listCompetitionEntries");
+  const [competitionId, setCompetitionId] = useState(activeCompetitionId || "");
+  const [raceId, setRaceId] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [resultData, setResultData] = useState(null);
+
+  const functions = getFunctions(undefined, "europe-west2");
+
+  const listCompetitionEntriesFn = httpsCallable(
+    functions,
+    "listCompetitionEntries"
+  );
+  const missingTipsFn = httpsCallable(functions, "missingTips");
+  const listRaceTipsFn = httpsCallable(functions, "listRaceTips");
+  const listRaceTipsHorseFn = httpsCallable(functions, "listRaceTipsHorse");
+
+  useEffect(() => {
+    setCompetitionId(activeCompetitionId || "");
+  }, [activeCompetitionId]);
+
+  const racesForSelectedCompetition = useMemo(() => {
+    if (!competitionId) return [];
+    return (races || []).filter((r) => r.competitionId === competitionId);
+  }, [races, competitionId]);
+
+  useEffect(() => {
+    if (!raceId) {
+      const firstRaceForDay =
+        racesForSelectedCompetition.find((r) => r.date === activeDay)?.id || "";
+      if (firstRaceForDay) {
+        setRaceId(firstRaceForDay);
+        return;
+      }
+
+      const firstRaceOverall = racesForSelectedCompetition[0]?.id || "";
+      if (firstRaceOverall) {
+        setRaceId(firstRaceOverall);
+      }
+    }
+  }, [activeDay, racesForSelectedCompetition, raceId]);
+
+  useEffect(() => {
+    if (!raceId) return;
+
+    const stillExists = racesForSelectedCompetition.some((r) => r.id === raceId);
+    if (!stillExists) {
+      setRaceId(racesForSelectedCompetition[0]?.id || "");
+    }
+  }, [competitionId, racesForSelectedCompetition, raceId]);
+
+  const handleRunTool = async () => {
+    try {
+      setLoading(true);
+      setResultData(null);
+
+      if (selectedTool === "listCompetitionEntries") {
+        const res = await listCompetitionEntriesFn({
+          competitionId: String(competitionId || "").trim(),
+        });
+        setResultData(res.data || null);
+        return;
+      }
+
+      if (selectedTool === "missingTips") {
+        const res = await missingTipsFn({
+          competitionId: String(competitionId || "").trim(),
+          raceId: String(raceId || "").trim(),
+        });
+        setResultData(res.data || null);
+        return;
+      }
+
+      if (selectedTool === "listRaceTips") {
+        const res = await listRaceTipsFn({
+          competitionId: String(competitionId || "").trim(),
+          raceId: String(raceId || "").trim(),
+        });
+        setResultData(res.data || null);
+        return;
+      }
+
+      if (selectedTool === "listRaceTipsHorse") {
+        const res = await listRaceTipsHorseFn({
+          competitionId: String(competitionId || "").trim(),
+          raceId: String(raceId || "").trim(),
+        });
+        setResultData(res.data || null);
+        return;
+      }
+
+      showMessage("Unknown tool", "That admin tool is not configured.");
+    } catch (e) {
+      showMessage(
+        "Script failed",
+        JSON.stringify(
+          {
+            code: e?.code,
+            message: e?.message,
+            details: e?.details,
+          },
+          null,
+          2
+        )
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const visibleRows = Array.isArray(resultData?.rows) ? resultData.rows : [];
+  const needsRaceId = [
+    "missingTips",
+    "listRaceTips",
+    "listRaceTipsHorse",
+  ].includes(selectedTool);
+
+  return (
+    <ScrollView contentContainerStyle={styles.container}>
+      <View style={styles.content}>
+        <Text style={styles.title}>Admin script runner</Text>
+        <Text style={styles.subtitle}>
+          Run predefined admin checks and view the results here.
+        </Text>
+
+        <View style={[styles.card, { marginTop: 12 }]}>
+          <Text style={styles.label}>Tool</Text>
+
+          <View style={styles.suggestionBox}>
+            <Pressable
+              style={[
+                styles.suggestionItem,
+                selectedTool === "listCompetitionEntries" && styles.toolSelected,
+              ]}
+              onPress={() => setSelectedTool("listCompetitionEntries")}
+            >
+              <Text style={styles.suggestionText}>
+                List of all competition entrants
+              </Text>
+            </Pressable>
+
+            <Pressable
+              style={[
+                styles.suggestionItem,
+                selectedTool === "missingTips" && styles.toolSelected,
+              ]}
+              onPress={() => setSelectedTool("missingTips")}
+            >
+              <Text style={styles.suggestionText}>List of missing tips</Text>
+            </Pressable>
+
+            <Pressable
+              style={[
+                styles.suggestionItem,
+                selectedTool === "listRaceTips" && styles.toolSelected,
+              ]}
+              onPress={() => setSelectedTool("listRaceTips")}
+            >
+              <Text style={styles.suggestionText}>List race tips</Text>
+            </Pressable>
+
+            <Pressable
+              style={[
+                styles.suggestionItem,
+                selectedTool === "listRaceTipsHorse" && styles.toolSelected,
+              ]}
+              onPress={() => setSelectedTool("listRaceTipsHorse")}
+            >
+              <Text style={styles.suggestionText}>List race tips by horse</Text>
+            </Pressable>
+          </View>
+
+          <Text style={[styles.label, { marginTop: 12 }]}>Competition</Text>
+          <View style={styles.pickerWrap}>
+            <Picker
+              selectedValue={competitionId}
+              onValueChange={(value) => {
+                setCompetitionId(value);
+                setRaceId("");
+              }}
+            >
+              <Picker.Item label="Select competition..." value="" />
+              {(competitions || []).map((comp) => (
+                <Picker.Item
+                  key={comp.id}
+                  label={comp.name || comp.id}
+                  value={comp.id}
+                />
+              ))}
+            </Picker>
+          </View>
+
+          {needsRaceId ? (
+            <>
+              <Text style={[styles.label, { marginTop: 12 }]}>Race</Text>
+              <View style={styles.pickerWrap}>
+                <Picker
+                  selectedValue={raceId}
+                  onValueChange={(value) => setRaceId(value)}
+                  enabled={racesForSelectedCompetition.length > 0}
+                >
+                  <Picker.Item label="Select race..." value="" />
+                  {racesForSelectedCompetition.map((race) => {
+                    const label = [
+                      race.date || "",
+                      race.offTimeText || race.offTime || "",
+                      race.name || race.id,
+                    ]
+                      .filter(Boolean)
+                      .join(" • ");
+
+                    return (
+                      <Picker.Item
+                        key={race.id}
+                        label={label}
+                        value={race.id}
+                      />
+                    );
+                  })}
+                </Picker>
+              </View>
+            </>
+          ) : null}
+
+          <Pressable
+            onPress={handleRunTool}
+            disabled={loading || !competitionId || (needsRaceId && !raceId)}
+            style={[
+              styles.button,
+              styles.buttonPrimary,
+              {
+                marginTop: 12,
+                opacity:
+                  loading || !competitionId || (needsRaceId && !raceId) ? 0.6 : 1,
+              },
+            ]}
+          >
+            <Text style={styles.buttonText}>
+              {loading ? "Running..." : "Run script"}
+            </Text>
+          </Pressable>
+        </View>
+
+        {resultData ? (
+          <View style={[styles.card, { marginTop: 12 }]}>
+            <Text style={styles.h2}>{resultData?.title || "Results"}</Text>
+
+            <Text style={styles.cardHint}>
+              {typeof resultData?.count === "number"
+                ? `${resultData.count} result(s)`
+                : ""}
+            </Text>
+
+            {!!resultData?.raceName ? (
+              <Text style={[styles.cardHint, { marginTop: 4 }]}>
+                Race: {resultData.raceName}
+              </Text>
+            ) : null}
+
+            {!!resultData?.raceId ? (
+              <Text style={[styles.cardHint, { marginTop: 2 }]}>
+                Race ID: {resultData.raceId}
+              </Text>
+            ) : null}
+
+            {visibleRows.length === 0 ? (
+              <Text style={[styles.cardHint, { marginTop: 8 }]}>
+                No results found.
+              </Text>
+            ) : resultData?.type === "listRaceTips" ? (
+              visibleRows.map((row, index) => (
+                <View
+                  key={`${row.userId || "row"}_${index}`}
+                  style={[
+                    styles.card,
+                    styles.cardAlt,
+                    { marginTop: 8, padding: 10 },
+                  ]}
+                >
+                  <Text style={styles.rowTitle}>
+                    {row.displayName || "Unknown user"}
+                  </Text>
+
+                  {!!row.email ? (
+                    <Text style={styles.rowSub}>{row.email}</Text>
+                  ) : null}
+
+                  <Text style={styles.rowSub}>
+                    {row.hasTip
+                      ? `TIP: ${row.horseName || "Unknown horse"}${
+                          row.odds ? ` (${row.odds})` : ""
+                        }`
+                      : "NO TIP"}
+                  </Text>
+
+                  {row.autoAssigned ? (
+                    <Text style={styles.rowSub}>
+                      Auto-assigned
+                      {row.autoAssignedReason
+                        ? `: ${row.autoAssignedReason}`
+                        : ""}
+                    </Text>
+                  ) : null}
+                </View>
+              ))
+            ) : resultData?.type === "listRaceTipsHorse" ? (
+              visibleRows.map((row, index) => (
+                <View
+                  key={`${row.horseName || "horse"}_${row.odds || ""}_${index}`}
+                  style={[
+                    styles.card,
+                    styles.cardAlt,
+                    { marginTop: 8, padding: 10 },
+                  ]}
+                >
+                  <Text style={styles.rowTitle}>
+                    {row.horseName || "Unknown horse"}
+                    {row.odds ? ` (${row.odds})` : ""}
+                  </Text>
+
+                  <Text style={styles.rowSub}>{row.count || 0} tip(s)</Text>
+
+                  {Array.isArray(row.usernames)
+                    ? row.usernames.map((name, i) => (
+                        <Text key={`${name}_${i}`} style={styles.rowSub}>
+                          • {name}
+                        </Text>
+                      ))
+                    : null}
+                </View>
+              ))
+            ) : (
+              visibleRows.map((row, index) => (
+                <View
+                  key={`${row.uid || row.username || "row"}_${index}`}
+                  style={[
+                    styles.card,
+                    styles.cardAlt,
+                    { marginTop: 8, padding: 10 },
+                  ]}
+                >
+                  <Text style={styles.rowTitle}>
+                    {row.username ||
+                      row.displayName ||
+                      row.uid ||
+                      "Unknown user"}
+                  </Text>
+
+                  {!!row.displayName && row.displayName !== row.username ? (
+                    <Text style={styles.rowSub}>{row.displayName}</Text>
+                  ) : null}
+
+                  {!!row.email ? (
+                    <Text style={styles.rowSub}>{row.email}</Text>
+                  ) : null}
+
+                  {!!row.uid ? (
+                    <Text style={styles.rowSub}>UID: {row.uid}</Text>
+                  ) : null}
+                </View>
+              ))
+            )}
+          </View>
+        ) : null}
+
+        <Pressable
+          style={[styles.button, { marginTop: 12 }]}
+          onPress={onBack}
+        >
+          <Text style={styles.buttonText}>Back</Text>
+        </Pressable>
+      </View>
+    </ScrollView>
   );
 }
 
@@ -6793,6 +7226,57 @@ suggestionItem: {
 suggestionText: {
   color: "#111",
   fontSize: 14,
+},
+
+label: {
+  fontSize: 14,
+  fontWeight: "600",
+  marginBottom: 6,
+  color: THEME.text,
+},
+
+input: {
+  borderWidth: 1,
+  borderColor: "#d9d9d9",
+  borderRadius: 10,
+  paddingHorizontal: 12,
+  paddingVertical: 10,
+  backgroundColor: "#fff",
+  color: "#111",
+},
+
+suggestionBox: {
+  marginTop: 6,
+  borderWidth: 1,
+  borderColor: "#ddd",
+  borderRadius: 10,
+  backgroundColor: "#fff",
+  overflow: "hidden",
+},
+
+suggestionItem: {
+  paddingHorizontal: 12,
+  paddingVertical: 10,
+  borderBottomWidth: 1,
+  borderBottomColor: "#eee",
+},
+
+suggestionText: {
+  color: "#111",
+  fontSize: 14,
+},
+
+toolSelected: {
+  backgroundColor: "#f4efe8",
+},
+
+pickerWrap: {
+  marginTop: 6,
+  borderWidth: 1,
+  borderColor: "#ddd",
+  borderRadius: 10,
+  backgroundColor: "#fff",
+  overflow: "hidden",
 },
 
 });
