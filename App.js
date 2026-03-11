@@ -4230,6 +4230,86 @@ function AdminCompetitionHomeScreen({
   onManageEntrants,
   onBack,
 }) {
+  const [resetUsername, setResetUsername] = useState("");
+  const [newPin, setNewPin] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [allUsernames, setAllUsernames] = useState([]);
+  const [usernameSuggestions, setUsernameSuggestions] = useState([]);
+
+  const functions = getFunctions(undefined, "europe-west2");
+  const resetUserPin = httpsCallable(functions, "adminResetUserPin");
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      collection(firestoreDb, "users"),
+      (snapshot) => {
+        const usernames = snapshot.docs
+          .map((docSnap) => {
+            const d = docSnap.data() || {};
+            return String(d.username || "").trim();
+          })
+          .filter(Boolean)
+          .sort((a, b) => a.localeCompare(b));
+
+        setAllUsernames(usernames);
+      },
+      (err) => {
+        showMessage("User lookup failed", err.message);
+      }
+    );
+
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    const q = String(resetUsername || "").trim().toLowerCase();
+
+    if (!q) {
+      setUsernameSuggestions([]);
+      return;
+    }
+
+    const matches = allUsernames
+      .filter((name) => name.toLowerCase().includes(q))
+      .slice(0, 8);
+
+    setUsernameSuggestions(matches);
+  }, [resetUsername, allUsernames]);
+
+  const handlePickUsername = (username) => {
+    setResetUsername(username);
+    setUsernameSuggestions([]);
+  };
+
+  const handleResetPin = async () => {
+    const username = String(resetUsername || "").trim();
+    const pin = String(newPin || "").trim();
+
+    if (!username || !pin) {
+      showMessage("Missing data", "Enter a username and new PIN.");
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      await resetUserPin({
+        username,
+        pin,
+      });
+
+      showMessage("Success", `PIN reset for ${username}.`);
+
+      setResetUsername("");
+      setNewPin("");
+      setUsernameSuggestions([]);
+    } catch (e) {
+      showMessage("Reset failed", e?.message || "Unknown error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const activeCompetition =
     (competitions ?? []).find((c) => c.id === activeCompetitionId) ?? null;
 
@@ -4241,7 +4321,9 @@ function AdminCompetitionHomeScreen({
         <View style={[styles.card, { marginTop: 8 }]}>
           <Text style={styles.h2}>Current active competition</Text>
           <Text style={styles.cardTitle}>
-            {activeCompetition?.name ? activeCompetition.name : "No active competition set"}
+            {activeCompetition?.name
+              ? activeCompetition.name
+              : "No active competition set"}
           </Text>
         </View>
 
@@ -4260,6 +4342,58 @@ function AdminCompetitionHomeScreen({
         >
           <Text style={styles.buttonText}>Manage entrants</Text>
         </Pressable>
+
+        <View style={[styles.card, { marginTop: 16 }]}>
+          <Text style={styles.h2}>Reset user PIN</Text>
+
+          <Text style={styles.label}>Username</Text>
+          <TextInput
+            value={resetUsername}
+            onChangeText={setResetUsername}
+            placeholder="Search username"
+            autoCapitalize="none"
+            autoCorrect={false}
+            style={styles.input}
+          />
+
+          {usernameSuggestions.length > 0 ? (
+            <View style={styles.suggestionBox}>
+              {usernameSuggestions.map((username) => (
+                <Pressable
+                  key={username}
+                  onPress={() => handlePickUsername(username)}
+                  style={styles.suggestionItem}
+                >
+                  <Text style={styles.suggestionText}>{username}</Text>
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
+
+          <Text style={[styles.label, { marginTop: 10 }]}>New PIN</Text>
+          <TextInput
+            value={newPin}
+            onChangeText={setNewPin}
+            placeholder="4–6 digit PIN"
+            keyboardType="number-pad"
+            secureTextEntry
+            style={styles.input}
+          />
+
+          <Pressable
+            style={[
+              styles.button,
+              styles.buttonPrimary,
+              { marginTop: 12, opacity: loading ? 0.6 : 1 },
+            ]}
+            onPress={handleResetPin}
+            disabled={loading}
+          >
+            <Text style={styles.buttonText}>
+              {loading ? "Updating..." : "Reset PIN"}
+            </Text>
+          </Pressable>
+        </View>
 
         <Pressable style={[styles.button, { marginTop: 10 }]} onPress={onBack}>
           <Text style={styles.buttonText}>Back</Text>
@@ -6638,6 +6772,27 @@ heroSecondaryPrize: {
   fontWeight: "800",
   color: "#6b7280",
   textAlign: "center",
+},
+
+suggestionBox: {
+  marginTop: 6,
+  borderWidth: 1,
+  borderColor: "#ddd",
+  borderRadius: 10,
+  backgroundColor: "#fff",
+  overflow: "hidden",
+},
+
+suggestionItem: {
+  paddingHorizontal: 12,
+  paddingVertical: 10,
+  borderBottomWidth: 1,
+  borderBottomColor: "#eee",
+},
+
+suggestionText: {
+  color: "#111",
+  fontSize: 14,
 },
 
 });

@@ -529,82 +529,6 @@ exports.authConsumeMagicLink = onCall(
   }
 );
 
-exports.adminResetUserPin = onCall(
-  { region: "europe-west2", cors: true },
-  async (request) => {
-    if (!request.auth) {
-      throw new HttpsError("unauthenticated", "Login required");
-    }
-
-    const db = admin.firestore();
-
-    const adminUserSnap = await db.collection("users").doc(request.auth.uid).get();
-    const adminData = adminUserSnap.data() || {};
-
-    if (!adminData.isAdmin) {
-      throw new HttpsError("permission-denied", "Admin only");
-    }
-
-    const username = String(request.data?.username || "").trim();
-    const newPin = String(request.data?.pin || "").trim();
-
-    if (!username || !newPin) {
-      throw new HttpsError("invalid-argument", "username and pin required");
-    }
-
-    if (!/^\d{4,6}$/.test(newPin)) {
-      throw new HttpsError("invalid-argument", "PIN must be 4–6 digits");
-    }
-
-    const usernameKey = normalizeUsernameKey(username);
-    if (!usernameKey) {
-      throw new HttpsError("invalid-argument", "Valid username required");
-    }
-
-    const usernameSnap = await db.collection("usernames").doc(usernameKey).get();
-    if (!usernameSnap.exists) {
-      throw new HttpsError("not-found", "Username not found");
-    }
-
-    const { uid } = usernameSnap.data() || {};
-    if (!uid) {
-      throw new HttpsError("not-found", "Username has no linked user");
-    }
-
-    const userRef = db.collection("users").doc(uid);
-    const userSnap = await userRef.get();
-    if (!userSnap.exists) {
-      throw new HttpsError("not-found", "User document not found");
-    }
-
-    const salt = crypto.randomBytes(16);
-    const pinHash = hashPinScrypt(newPin, salt);
-
-    await userRef.set(
-      {
-        pinHash,
-        pinSalt: salt.toString("base64"),
-        failedPinAttempts: 0,
-        pinLockUntil: null,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
-
-    logger.info("Admin reset PIN by username", {
-      adminUid: request.auth.uid,
-      targetUid: uid,
-      usernameKey,
-    });
-
-    return {
-      success: true,
-      uid,
-      username: usernameKey,
-    };
-  }
-);
-
 // -----------------------------------------------------------------------------
 // ✅ Seed overall leaderboard entry as soon as a user is registered
 // -----------------------------------------------------------------------------
@@ -784,8 +708,8 @@ function calcEachWayTotalReturnInclStake({
   const isWin = finishPosition === 1;
   const isPlaced = finishPosition >= 1 && finishPosition <= placesPaid;
 
-  const winWinnings = isWin ? stakeWin * (odds - 1) : 0;
-  const placeOdds = (odds - 1) * placeFraction;
+  const winWinnings = isWin ? stakeWin * odds : 0;
+  const placeOdds = odds * placeFraction;
   const placeWinnings = isPlaced ? stakePlace * placeOdds : 0;
 
   const winReturn = isWin ? stakeWin + winWinnings : 0;

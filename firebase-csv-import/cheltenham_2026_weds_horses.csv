@@ -1,79 +1,26 @@
 ﻿docId,horseId,name,trainer,number,jockey,odds,competitionId,race
-,,Bass Hunter,,,,,cheltenham_2026,17:20 Wednesday
-,,Boycetown,,,,,cheltenham_2026,17:20 Wednesday
-,,Broadway Ted,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
-,,,,,,,cheltenham_2026,17:20 Wednesday
+bass_hunter,bass_hunter,Bass Hunter,C Gordon,1,Freddie Gordon,10/1,cheltenham_2026,17:20 Wednesday
+boycetown,boycetown,Boycetown,G P Cromwell,2,Keith Donoghue,25/1,cheltenham_2026,17:20 Wednesday
+broadway_ted,broadway_ted,Broadway Ted,G Elliott,3,Sean Bowen,14/1,cheltenham_2026,17:20 Wednesday
+charismatic_kid,charismatic_kid,Charismatic Kid,G Elliott,4,Sam Ewing,20/1,cheltenham_2026,17:20 Wednesday
+chicker,chicker,Chicker,F O'Brien,5,J J Burke,66/1,cheltenham_2026,17:20 Wednesday
+diamant_dore,diamant_dore,Diamant Dore,A Keatley,6,B S Hughes,25/1,cheltenham_2026,17:20 Wednesday
+it's_only_a_game,it's_only_a_game,It's Only a Game,M Brassil,7,Mr J L Gleeson,14/1,cheltenham_2026,17:20 Wednesday
+keep_him_company,keep_him_company,Keep Him Company,G Elliott,8,Jack Kennedy,7/1,cheltenham_2026,17:20 Wednesday
+love_sign_d'aunou,love_sign_d'aunou,Love Sign D'Aunou,W P Mullins,9,Mr P W Mullins,9/2,cheltenham_2026,17:20 Wednesday
+of_land_and_sea,of_land_and_sea,Of Land and Sea,P Hennessy,10,Richard Condon,33/1,cheltenham_2026,17:20 Wednesday
+tally_ho_back,tally_ho_back,Tally Ho Back,Nigel & Willy Twiston-Davies,11,Sam Twiston-Davies,50/1,cheltenham_2026,17:20 Wednesday
+the_irish_avatar,the_irish_avatar,The Irish Avatar,W P Mullins,12,Harry Cobden,7/1,cheltenham_2026,17:20 Wednesday
+the_mourne_rambler,the_mourne_rambler,The Mourne Rambler,N Meade,13,Colin Keane,8/1,cheltenham_2026,17:20 Wednesday
+the_sketcher,the_sketcher,The Sketcher,Dan Skelton,14,Tristan Durrell,33/1,cheltenham_2026,17:20 Wednesday
+the_wager,the_wager,The Wager,W P Mullins,15,Miss J Townend,25/1,cheltenham_2026,17:20 Wednesday
+vango_can_go,vango_can_go,Vango Can Go,Dan Skelton,16,C J Todd,50/1,cheltenham_2026,17:20 Wednesday
+wilde's_legacy,wilde's_legacy,Wilde's Legacy,Jamie Snowden,17,G Sheehan,33/1,cheltenham_2026,17:20 Wednesday
+with_nolimit,with_nolimit,With Nolimit,G Elliott,18,Mr H C Swan,25/1,cheltenham_2026,17:20 Wednesday
+moonverrin,moonverrin,Moonverrin,M Hassett,19,Mr F Maguire,16/1,cheltenham_2026,17:20 Wednesday
+our_trigger,our_trigger,Our Trigger,W P Mullins,20,Danny Mullins,12/1,cheltenham_2026,17:20 Wednesday
+quiryn,quiryn,Quiryn,W P Mullins,21,Paul Townend,7/1,cheltenham_2026,17:20 Wednesday
+mets_ta_ceinture,mets_ta_ceinture,Mets Ta Ceinture,Dan Skelton,22,Harry Skelton,12/1,cheltenham_2026,17:20 Wednesday
 calico,calico,Calico,Dan Skelton,2,Tristan Durrell,20/1,cheltenham_2026,16:40 Wednesday
 touch_me_not,touch_me_not,Touch Me Not,G Elliott,1,James Smith,20/1,cheltenham_2026,16:40 Wednesday
 rubaud,rubaud,Rubaud,P F Nicholls,3,Harry Cobden,20/1,cheltenham_2026,16:40 Wednesday
@@ -94,8 +41,6 @@ break_my_soul,break_my_soul,Break My Soul,Ian Patrick Donoghue,17,Sam Ewing,20/1
 relieved_of_duties,relieved_of_duties,Relieved of Duties,G Elliott,18,Jack Kennedy,16/1,cheltenham_2026,16:40 Wednesday
 jasko_des_dames,jasko_des_dames,Jasko Des Dames,H De Bromhead,19,Darragh O'Keefe,16/1,cheltenham_2026,16:40 Wednesday
 release_the_beast,release_the_beast,Release The Beast,P Nolan,20,Sean Flanagan,10/1,cheltenham_2026,16:40 Wednesday
-golden_joy,golden_joy,Golden Joy,G Elliott,21,Reserve 1,33/1,cheltenham_2026,16:40 Wednesday
-ryan's_rocket,ryan's_rocket,Ryan's Rocket,F O'Brien,22,Reserve 2,10/1,cheltenham_2026,16:40 Wednesday
 brookie,brookie,Brookie,A J Honeyball,1,Sam Twiston-Davies,100/1,cheltenham_2026,16:00 Wednesday
 captain_guinness,captain_guinness,Captain Guinness,H De Bromhead,2,Jordan Gainford,50/1,cheltenham_2026,16:00 Wednesday
 found_a_fifty,found_a_fifty,Found A Fifty,G Elliott,3,Jack Kennedy,33/1,cheltenham_2026,16:00 Wednesday
@@ -182,8 +127,6 @@ walks_in_june,walks_in_june,Walks In June,H De Bromhead,21,Darragh O'Keefe,33/1,
 zeus_power,zeus_power,Zeus Power,J P O'Brien,22,J J Slevin,33/1,cheltenham_2026,13:20 Wednesday
 forty_coats,forty_coats,Forty Coats,H De Bromhead,23,Darragh O'Keefe,16/1,cheltenham_2026,14:40 Wednesday
 hms_seahorse,hms_seahorse,HMS Seahorse,P Nolan,24,Eoin Staples,50/1,cheltenham_2026,14:40 Wednesday
-i_started_a_joke,i_started_a_joke,I Started A Joke,C Byrnes,25,Reserve 1,10/1,cheltenham_2026,14:40 Wednesday
-intense_approach,intense_approach,Intense Approach,J C McConnell,26,Reserve 2,50/1,cheltenham_2026,14:40 Wednesday
 ,,,,,,,,
 ,,,,,,,,
 ,,,,,,,,
