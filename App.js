@@ -2435,7 +2435,7 @@ function HomeScreen({
                       { transform: [{ translateX: sheenX }, { rotate: "20deg" }] },
                     ]}
                   />
-                  <Text style={styles.heroCtaText}>PICKS FOR DAY 2  FROM 6PM</Text>
+                  <Text style={styles.heroCtaText}>PICKS FOR DAY 3 OPEN AT 6PM</Text>
                 </AnimatedPressable>
               </View>
             </View>
